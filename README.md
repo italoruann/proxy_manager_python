@@ -56,6 +56,11 @@ pip install -r requirements-dev.txt
 python -m proxy_manager
 ```
 
+Pra usar o **modo transparente** no Linux (exige root) sem precisar empacotar nada, `sudo`
+sozinho costuma falhar pra apps gráficos (o `root` não tem acesso à sua sessão Wayland/X11 por
+padrão). Rode `./scripts/run_linux_admin.sh` em vez disso — ele libera o root pro seu display e
+abre o app elevado via `pkexec`.
+
 ## Executável empacotado (abre já elevado)
 
 Pra não precisar de terminal elevado nem configurar "Executar como administrador" toda vez,
