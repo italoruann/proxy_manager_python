@@ -21,9 +21,11 @@ os.environ["XDG_DATA_HOME"] = TMP_CONFIG_DIR
 from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtTest import QTest
 
+from proxy_manager.core.config import ProxyProfile
 from proxy_manager.core.rules import RuleSet
 from proxy_manager.gui.app_context import AppContext
 from proxy_manager.gui.main_window import MainWindow
+from proxy_manager.gui.pages.proxies_page import ProxiesPage
 
 # Evita que caixas de diálogo modais (QMessageBox) travem o teste esperando um clique humano.
 QMessageBox.information = staticmethod(lambda *a, **k: None)
@@ -64,6 +66,27 @@ def test_add_and_remove_proxy_profile(window):
     page.port_spin.setValue(1080)
     page._on_save()
     assert page.ctx.config.proxies[-1].host == "proxy.example.com"
+
+
+def test_proxies_page_form_is_editable_on_open_when_a_profile_already_exists(app):
+    """Regressão: __init__ chamava _set_form_enabled(False) logo depois de _reload_list() —
+    que, quando já existe pelo menos um perfil salvo (o caso normal de reabrir o app), seleciona
+    a primeira linha sozinho e HABILITA o formulário via _on_selection_changed. Essa chamada
+    extra desfazia a habilitação na hora, deixando os campos travados pro primeiro perfil logo
+    na abertura da página (só destravava criando e apagando um perfil novo, porque esse fluxo
+    não passa por aquela linha extra)."""
+    ctx = AppContext()
+    # insert(0, ...), não append(...): outros testes deste módulo compartilham o mesmo diretório
+    # de config (TMP_CONFIG_DIR) e podem já ter salvo outros perfis — precisa ser o primeiro da
+    # lista de propósito, já que é exatamente a linha 0 que _reload_list() auto-seleciona.
+    ctx.config.proxies.insert(0, ProxyProfile(name="Já existente", host="proxy.exemplo.com"))
+
+    page = ProxiesPage(ctx)
+
+    assert page.host_edit.isEnabled()
+    assert page.name_edit.isEnabled()
+    assert page.save_btn.isEnabled()
+    assert page.host_edit.text() == "proxy.exemplo.com"
 
 
 def test_rules_table_round_trip(window):

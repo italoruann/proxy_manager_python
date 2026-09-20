@@ -110,8 +110,11 @@ class ProxiesPage(QWidget):
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 2)
 
+        # _reload_list() já deixa o formulário no estado certo sozinho: desabilitado se não
+        # houver nenhum perfil (seu próprio ramo "else" cuida disso), ou habilitado com o
+        # primeiro perfil carregado quando já existe algum — chamar _set_form_enabled(False)
+        # aqui de novo, incondicionalmente, desfazia esse segundo caso bem na inicialização.
         self._reload_list()
-        self._set_form_enabled(False)
 
     # -- helpers -----------------------------------------------------------
 
