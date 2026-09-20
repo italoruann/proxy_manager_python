@@ -281,6 +281,33 @@ class _FakeCloseEvent:
         self.ignored = True
 
 
+def test_settings_page_changes_port_without_stopping_engine(window):
+    """Regressão: trocar a porta nas Configurações com o motor rodando não pode exigir parar e
+    religar ele (isso derrubaria toda conexão ativa, mesmo em portas não relacionadas à que
+    mudou) — precisa trocar só o listener daquela porta específica, ao vivo."""
+    window.nav_buttons[0].click()
+    dashboard = window.dashboard_page
+    dashboard.ctx.config.settings.socks_port = 58910
+    dashboard.ctx.config.settings.http_port = 58911
+    dashboard.ctx.config.settings.pac_port = 58912
+
+    dashboard._on_toggle_clicked()
+    QTest.qWait(300)
+    assert dashboard.ctx.engine.is_running()
+
+    window.nav_buttons[4].click()
+    page = window.settings_page
+    page.socks_port_spin.setValue(58910)  # sem mudança
+    page.http_port_spin.setValue(58911)  # sem mudança
+    page.pac_port_spin.setValue(58913)  # só o PAC muda
+    page._on_save_ports()
+    QTest.qWait(200)
+
+    # o motor nunca parou (é exatamente o que "trocar sem derrubar" significa)
+    assert page.ctx.engine.is_running()
+    assert page.ctx.config.settings.pac_port == 58913
+
+
 def test_close_without_tray_stops_engine_and_quits_app(window, app, monkeypatch):
     """Regressão: sem bandeja do sistema (GNOME sem extensão, por exemplo), só esconder a janela
     ao fechar deixaria o processo rodando sem nenhum jeito de reabri-lo. Fechar precisa fechar

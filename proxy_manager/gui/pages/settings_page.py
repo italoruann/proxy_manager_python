@@ -100,13 +100,23 @@ class SettingsPage(QWidget):
         settings.socks_port = self.socks_port_spin.value()
         settings.http_port = self.http_port_spin.value()
         settings.pac_port = self.pac_port_spin.value()
-        was_running = self.ctx.engine.is_running()
-        if was_running:
-            self.ctx.engine.stop()
-        self.ctx.apply_config_changes()
-        if was_running:
-            self.ctx.engine.start()
-        QMessageBox.information(self, "Portas", "Portas atualizadas.")
+
+        if self.ctx.engine.is_running():
+            ok, message = self.ctx.apply_settings_live()
+            # Reflete de volta nos campos o que REALMENTE ficou valendo — se alguma porta não
+            # pôde ser trocada (ex.: já em uso), apply_settings_live já reverteu esse valor
+            # específico em self.ctx.config.settings; sem isso, o campo ficaria mostrando um
+            # número que não é o que está de fato escutando.
+            self.socks_port_spin.setValue(settings.socks_port)
+            self.http_port_spin.setValue(settings.http_port)
+            self.pac_port_spin.setValue(settings.pac_port)
+            if ok:
+                QMessageBox.information(self, "Portas", message)
+            else:
+                QMessageBox.warning(self, "Portas", message)
+        else:
+            self.ctx.apply_config_changes()
+            QMessageBox.information(self, "Portas", "Portas atualizadas.")
 
     # -- integração com o sistema -----------------------------------------------
 
@@ -315,17 +325,16 @@ class SettingsPage(QWidget):
         settings = self.ctx.config.settings
         settings.transparent_mode_enabled = self.transparent_check.isChecked()
         settings.transparent_port = self.transparent_port_spin.value()
-        was_running = self.ctx.engine.is_running()
-        if was_running:
-            self.ctx.engine.stop()
-        self.ctx.apply_config_changes()
-        if was_running:
-            self.ctx.engine.start()
-            ok = self.ctx.engine.is_running()
-            self.transparent_result_label.setText(
-                "Motor reiniciado com o modo transparente ativo." if ok else
-                "O motor não conseguiu reiniciar — veja a página Dashboard para o erro exato "
-                "(privilégio insuficiente, nft/pydivert ausente, porta em uso, etc.).")
+
+        if self.ctx.engine.is_running():
+            ok, message = self.ctx.apply_settings_live()
+            # Se a ativação falhou, apply_settings_live já reverteu esses dois campos em
+            # self.ctx.config.settings — reflete de volta na UI pra não mostrar um estado que
+            # não é o que está de fato valendo.
+            self.transparent_check.setChecked(settings.transparent_mode_enabled)
+            self.transparent_port_spin.setValue(settings.transparent_port)
+            self.transparent_result_label.setText(message)
         else:
+            self.ctx.apply_config_changes()
             self.transparent_result_label.setText(
                 "Configurações salvas. Serão aplicadas quando você iniciar o motor no Dashboard.")

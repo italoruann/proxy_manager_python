@@ -56,7 +56,12 @@ class ProxyEngine:
 
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
-        self._servers: list[asyncio.AbstractServer] = []
+        # Listeners guardados por nome (em vez de uma lista solta) para permitir trocar só o
+        # que realmente mudou (ver apply_settings_live) sem precisar derrubar o motor inteiro.
+        self._socks_server: Optional[asyncio.AbstractServer] = None
+        self._http_server: Optional[asyncio.AbstractServer] = None
+        self._pac_server: Optional[asyncio.AbstractServer] = None
+        self._transparent_server: Optional[asyncio.AbstractServer] = None
         self._ready = threading.Event()
         self._active_writers: set[asyncio.StreamWriter] = set()
         self.transparent_backend: Optional[TransparentBackend] = None
@@ -126,13 +131,14 @@ class ProxyEngine:
     async def _start_servers(self) -> None:
         settings = self.config.settings
         try:
-            socks_server = await asyncio.start_server(self._handle_socks_client, "127.0.0.1", settings.socks_port)
-            http_server = await asyncio.start_server(self._handle_http_client, "127.0.0.1", settings.http_port)
-            pac_server = await start_pac_server(self._pac_text, settings.pac_port)
+            self._socks_server = await asyncio.start_server(
+                self._handle_socks_client, "127.0.0.1", settings.socks_port)
+            self._http_server = await asyncio.start_server(
+                self._handle_http_client, "127.0.0.1", settings.http_port)
+            self._pac_server = await start_pac_server(self._pac_text, settings.pac_port)
         except OSError as exc:
             self._emit_status(False, f"Não foi possível abrir as portas locais: {exc}")
             raise
-        self._servers = [socks_server, http_server, pac_server]
 
         if settings.transparent_mode_enabled:
             backend = _create_transparent_backend(settings.transparent_port)
@@ -143,9 +149,8 @@ class ProxyEngine:
             if not ok:
                 self._emit_status(False, f"Falha ao ativar o modo transparente: {message}")
                 raise RuntimeError(message)
-            transparent_server = await asyncio.start_server(
+            self._transparent_server = await asyncio.start_server(
                 self._handle_transparent_client, "127.0.0.1", settings.transparent_port)
-            self._servers.append(transparent_server)
             self.transparent_backend = backend
 
         self._emit_status(True, "Motor iniciado")
@@ -153,8 +158,13 @@ class ProxyEngine:
     def _pac_text(self) -> str:
         return build_pac_script(self.config.settings.socks_port, self.config.settings.http_port)
 
+    def _all_servers(self) -> list[asyncio.AbstractServer]:
+        return [s for s in (self._socks_server, self._http_server, self._pac_server,
+                             self._transparent_server) if s is not None]
+
     async def _shutdown(self) -> None:
-        for server in self._servers:
+        servers = self._all_servers()
+        for server in servers:
             server.close()
 
         # "Parar o motor" precisa ser imediato — não esperamos túneis de longa duração (ex.:
@@ -167,12 +177,15 @@ class ProxyEngine:
                 pass
         self._active_writers.clear()
 
-        for server in self._servers:
+        for server in servers:
             try:
                 await asyncio.wait_for(server.wait_closed(), timeout=3)
             except Exception:
                 pass
-        self._servers = []
+        self._socks_server = None
+        self._http_server = None
+        self._pac_server = None
+        self._transparent_server = None
 
         if self.transparent_backend is not None:
             await asyncio.to_thread(self.transparent_backend.stop)
@@ -182,6 +195,146 @@ class ProxyEngine:
         # loop.stop() é chamado por quem invocou stop(), depois que este future resolver
         # (ver ProxyEngine.stop) — não aqui dentro, para não correr contra o próprio callback
         # de conclusão desta coroutine.
+
+    # -- aplicar configuração sem parar o motor ------------------------------
+
+    def apply_settings_live(self, new_config: AppConfig) -> tuple[bool, str]:
+        """Troca portas/modo transparente SEM parar o motor: fecha e reabre só o listener cuja
+        porta realmente mudou, deixando os demais listeners e TODAS as conexões já em andamento
+        (self._active_writers) completamente intactos — diferente de stop()+start(), que derruba
+        tudo. A única descontinuidade inevitável é a porta específica que muda: não dá pra mover
+        um socket escutando pra outra porta sem fechar e abrir de novo, mas as conexões que já
+        estavam estabelecidas nela continuam rodando normalmente (elas usam um socket separado do
+        socket que só *aceita novas* conexões).
+
+        Só funciona com o motor rodando; chame update_config() + start() normalmente quando ele
+        estiver parado."""
+        loop = self._loop
+        if not self.is_running() or loop is None or not loop.is_running():
+            return False, "O motor não está em execução."
+        future = asyncio.run_coroutine_threadsafe(self._apply_settings_live(new_config), loop)
+        try:
+            return future.result(timeout=10)
+        except Exception as exc:
+            return False, f"Falha ao aplicar configurações: {exc}"
+
+    async def _apply_settings_live(self, new_config: AppConfig) -> tuple[bool, str]:
+        old_settings = self.config.settings
+        new_settings = new_config.settings
+        applied: list[str] = []
+        errors: list[str] = []
+
+        if new_settings.socks_port != old_settings.socks_port:
+            try:
+                self._socks_server = await self._replace_server(
+                    self._socks_server, self._handle_socks_client, new_settings.socks_port)
+                applied.append(f"SOCKS5 → porta {new_settings.socks_port}")
+            except OSError as exc:
+                errors.append(f"porta SOCKS5 ({new_settings.socks_port}): {exc}")
+                new_settings.socks_port = old_settings.socks_port
+
+        if new_settings.http_port != old_settings.http_port:
+            try:
+                self._http_server = await self._replace_server(
+                    self._http_server, self._handle_http_client, new_settings.http_port)
+                applied.append(f"HTTP → porta {new_settings.http_port}")
+            except OSError as exc:
+                errors.append(f"porta HTTP ({new_settings.http_port}): {exc}")
+                new_settings.http_port = old_settings.http_port
+
+        if new_settings.pac_port != old_settings.pac_port:
+            try:
+                self._pac_server = await self._replace_pac_server(self._pac_server, new_settings.pac_port)
+                applied.append(f"PAC → porta {new_settings.pac_port}")
+            except OSError as exc:
+                errors.append(f"porta do PAC ({new_settings.pac_port}): {exc}")
+                new_settings.pac_port = old_settings.pac_port
+
+        transparent_changed = (
+            new_settings.transparent_mode_enabled != old_settings.transparent_mode_enabled
+            or (new_settings.transparent_mode_enabled
+                and new_settings.transparent_port != old_settings.transparent_port)
+        )
+        if transparent_changed:
+            try:
+                await self._apply_transparent_settings(new_settings)
+                applied.append("modo transparente")
+            except (OSError, RuntimeError) as exc:
+                errors.append(f"modo transparente: {exc}")
+                new_settings.transparent_mode_enabled = old_settings.transparent_mode_enabled
+                new_settings.transparent_port = old_settings.transparent_port
+
+        # Só commitamos a config nova (e re-emitimos status, que é o que faz o AppContext
+        # reaplicar a URL do PAC no SO se a porta dele mudou) depois de já termos revertido, nos
+        # próprios new_settings, qualquer item que tenha falhado — assim self.config sempre
+        # reflete exatamente o que está de fato escutando em cada porta neste momento.
+        self.config = new_config
+        self.rule_set = RuleSet.parse(new_config.rules_text)
+
+        if applied:
+            self._emit_status(True, "Configurações aplicadas sem parar o motor: " + ", ".join(applied) + ".")
+
+        if errors:
+            return False, ("Alguns itens não puderam ser aplicados (mantidos como estavam): "
+                            + "; ".join(errors))
+        if not applied:
+            return True, "Nada mudou nas portas/modo transparente."
+        return True, "Aplicado sem parar o motor: " + ", ".join(applied) + "."
+
+    @staticmethod
+    async def _replace_server(old_server: Optional[asyncio.AbstractServer], handler, new_port: int,
+                               ) -> asyncio.AbstractServer:
+        # Abre o novo listener ANTES de fechar o velho: se a porta nova estiver ocupada (ou
+        # qualquer outro OSError), o velho continua no ar e ninguém percebe a falha como uma
+        # interrupção — só como "não consegui trocar pra essa porta".
+        new_server = await asyncio.start_server(handler, "127.0.0.1", new_port)
+        if old_server is not None:
+            old_server.close()
+            await asyncio.wait_for(old_server.wait_closed(), timeout=3)
+        return new_server
+
+    async def _replace_pac_server(self, old_server: Optional[asyncio.AbstractServer], new_port: int,
+                                   ) -> asyncio.AbstractServer:
+        new_server = await start_pac_server(self._pac_text, new_port)
+        if old_server is not None:
+            old_server.close()
+            await asyncio.wait_for(old_server.wait_closed(), timeout=3)
+        return new_server
+
+    async def _apply_transparent_settings(self, new_settings) -> None:
+        old_backend = self.transparent_backend
+        old_server = self._transparent_server
+
+        if not new_settings.transparent_mode_enabled:
+            if old_server is not None:
+                old_server.close()
+                await asyncio.wait_for(old_server.wait_closed(), timeout=3)
+                self._transparent_server = None
+            if old_backend is not None:
+                await asyncio.to_thread(old_backend.stop)
+                self.transparent_backend = None
+            return
+
+        backend = _create_transparent_backend(new_settings.transparent_port)
+        if backend is None:
+            raise RuntimeError("modo transparente não é suportado nesta plataforma")
+        ok, message = await asyncio.to_thread(backend.start)
+        if not ok:
+            raise RuntimeError(message)
+
+        new_server = await asyncio.start_server(
+            self._handle_transparent_client, "127.0.0.1", new_settings.transparent_port)
+
+        # Mesma ideia do _replace_server: só desliga o backend/listener antigos depois que os
+        # novos já estão de pé, então uma falha não deixa o modo transparente sem nada rodando.
+        if old_server is not None:
+            old_server.close()
+            await asyncio.wait_for(old_server.wait_closed(), timeout=3)
+        if old_backend is not None:
+            await asyncio.to_thread(old_backend.stop)
+
+        self._transparent_server = new_server
+        self.transparent_backend = backend
 
     def _track(self, *writers: asyncio.StreamWriter) -> None:
         self._active_writers.update(writers)

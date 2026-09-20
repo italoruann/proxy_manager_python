@@ -115,3 +115,16 @@ class AppContext(QObject):
         self.log_store.retention_days = self.config.settings.log_retention_days
         self.save()
         self.config_changed.emit()
+
+    def apply_settings_live(self) -> tuple[bool, str]:
+        """Como apply_config_changes(), mas pra mudanças de porta/modo transparente com o motor
+        JÁ rodando: em vez de update_config() (que só atualiza o estado em memória, sem tocar
+        nos listeners), troca só o socket da porta que mudou — sem parar o motor nem derrubar
+        conexões que não têm nada a ver com a porta trocada. Só funciona com o motor rodando;
+        quem chama continua responsável por cair para apply_config_changes() quando ele estiver
+        parado (ali update_config() já basta, os listeners nem existem ainda)."""
+        ok, message = self.engine.apply_settings_live(self.config)
+        self.log_store.retention_days = self.config.settings.log_retention_days
+        self.save()
+        self.config_changed.emit()
+        return ok, message
