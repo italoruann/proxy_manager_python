@@ -10,6 +10,11 @@ dependencies = [
     "keyring>=24.0",
 ]
 
+[project.optional-dependencies]
+# Só necessário pra ligar o modo transparente no Windows (driver WinDivert). No Linux, o modo
+# transparente usa o binário `iptables` do sistema — nenhuma dependência Python extra.
+transparent-windows = ["pydivert>=2.1; sys_platform == 'win32'"]
+
 [project.scripts]
 proxy-manager = "proxy_manager.main:main"
 

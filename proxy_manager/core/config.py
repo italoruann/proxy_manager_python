@@ -109,6 +109,8 @@ class Settings:
     default_action: str = "direct"  # "direct" | "block"
     log_retention_days: int = 14
     start_minimized: bool = False
+    transparent_mode_enabled: bool = False
+    transparent_port: int = 58095
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

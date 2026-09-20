@@ -4,17 +4,39 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import platform
 import threading
 import time
-from typing import Callable, Optional
+from typing import Callable, Optional, Protocol
 
 from . import httpproxy, process_lookup, socks5
 from .config import AppConfig, ProxyProfile
 from .logstore import LogEntry, LogStore
 from .rules import MatchResult, RuleSet
 from .system_integration import build_pac_script, start_pac_server
+from .transparent import sniff
 
 StatusCallback = Callable[[bool, str], None]
+
+
+class TransparentBackend(Protocol):
+    """Interface comum a LinuxTransparentMode e WindowsTransparentMode — o engine não precisa
+    saber qual das duas está ativa."""
+
+    def start(self) -> tuple[bool, str]: ...
+    def stop(self) -> tuple[bool, str]: ...
+    def resolve_destination(self, writer: asyncio.StreamWriter, peer_port: int) -> Optional[tuple[str, int]]: ...
+
+
+def _create_transparent_backend(transparent_port: int) -> Optional[TransparentBackend]:
+    system = platform.system()
+    if system == "Linux":
+        from .transparent.linux_iptables import LinuxTransparentMode
+        return LinuxTransparentMode(transparent_port)
+    if system == "Windows":
+        from .transparent.windows_windivert import WindowsTransparentMode
+        return WindowsTransparentMode(transparent_port)
+    return None
 
 
 def _literal_ip(host: str) -> Optional[str]:
@@ -37,6 +59,7 @@ class ProxyEngine:
         self._servers: list[asyncio.AbstractServer] = []
         self._ready = threading.Event()
         self._active_writers: set[asyncio.StreamWriter] = set()
+        self.transparent_backend: Optional[TransparentBackend] = None
 
         self.active_connections = 0
         self.total_bytes_sent = 0
@@ -110,6 +133,21 @@ class ProxyEngine:
             self._emit_status(False, f"Não foi possível abrir as portas locais: {exc}")
             raise
         self._servers = [socks_server, http_server, pac_server]
+
+        if settings.transparent_mode_enabled:
+            backend = _create_transparent_backend(settings.transparent_port)
+            if backend is None:
+                self._emit_status(False, "Modo transparente não é suportado nesta plataforma.")
+                raise RuntimeError("modo transparente não suportado nesta plataforma")
+            ok, message = backend.start()
+            if not ok:
+                self._emit_status(False, f"Falha ao ativar o modo transparente: {message}")
+                raise RuntimeError(message)
+            transparent_server = await asyncio.start_server(
+                self._handle_transparent_client, "127.0.0.1", settings.transparent_port)
+            self._servers.append(transparent_server)
+            self.transparent_backend = backend
+
         self._emit_status(True, "Motor iniciado")
 
     def _pac_text(self) -> str:
@@ -135,6 +173,11 @@ class ProxyEngine:
             except Exception:
                 pass
         self._servers = []
+
+        if self.transparent_backend is not None:
+            await asyncio.to_thread(self.transparent_backend.stop)
+            self.transparent_backend = None
+
         self._emit_status(False, "Motor parado")
         # loop.stop() é chamado por quem invocou stop(), depois que este future resolver
         # (ver ProxyEngine.stop) — não aqui dentro, para não correr contra o próprio callback
@@ -165,10 +208,16 @@ class ProxyEngine:
         return "(padrão)"
 
     async def _prepare(self, target_host: str, target_port: int, peer_ip: str, peer_port: int,
-                        listen_port: int, protocol: str) -> tuple[MatchResult, Optional[ProxyProfile], LogEntry]:
+                        listen_port: int, protocol: str, match_host: Optional[str] = None,
+                        ) -> tuple[MatchResult, Optional[ProxyProfile], LogEntry]:
+        """`match_host` só é usado pelo modo transparente: lá, `target_host` é sempre o IP real
+        (recuperado via SO_ORIGINAL_DST/NAT, precisa continuar valendo pras regras por IP/CIDR),
+        enquanto `match_host` é o domínio, quando dá pra descobrir espiando SNI/Host — usado nas
+        regras por domínio e no log, no lugar do IP cru."""
         proc = await asyncio.to_thread(process_lookup.lookup_by_local_peer, peer_ip, peer_port, listen_port)
         ip_literal = _literal_ip(target_host)
-        match = self.rule_set.match(proc.name, proc.path, target_host, ip_literal,
+        host_for_rules = match_host or target_host
+        match = self.rule_set.match(proc.name, proc.path, host_for_rules, ip_literal,
                                      default_action=self.config.settings.default_action)
         profile: Optional[ProxyProfile] = None
         proxy_label = ""
@@ -178,7 +227,7 @@ class ProxyEngine:
 
         entry = self.log_store.add(LogEntry(
             pid=proc.pid, process_name=proc.name, process_path=proc.path, protocol=protocol,
-            dst_host=target_host, dst_port=target_port, matched_rule=self._rule_label(match),
+            dst_host=host_for_rules, dst_port=target_port, matched_rule=self._rule_label(match),
             action=match.action_kind, proxy_used=proxy_label,
         ))
         return match, profile, entry
@@ -283,6 +332,77 @@ class ProxyEngine:
             self.active_connections -= 1
             self._untrack(writer, target_writer)
         self.log_store.update(entry.id, status="concluida", bytes_sent=sent, bytes_recv=recv,
+                               duration_ms=self._elapsed_ms(start))
+
+    # -- Transparente (iptables REDIRECT no Linux / WinDivert no Windows) ------
+
+    async def _handle_transparent_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        start = time.monotonic()
+        peer = writer.get_extra_info("peername") or ("", 0)
+        backend = self.transparent_backend
+        destination = backend.resolve_destination(writer, peer[1]) if backend else None
+        if destination is None:
+            # Não há como saber pra onde essa conexão deveria ir de verdade (backend desligado,
+            # ou alguém conectou direto nessa porta por fora do redirect) — não dá pra encaminhar.
+            writer.close()
+            return
+        target_host, target_port = destination
+
+        # Sem CONNECT nem Host explícito aqui — espiamos os primeiros bytes que o cliente manda
+        # (SNI do TLS em 443, ou o header Host em 80) só pra permitir regras por domínio; os
+        # mesmos bytes são sempre repassados ao destino de verdade logo abaixo, intactos.
+        prefix = b""
+        if target_port in (80, 443):
+            try:
+                prefix = await asyncio.wait_for(reader.read(4096), timeout=0.3)
+            except (asyncio.TimeoutError, OSError):
+                prefix = b""
+
+        sniffed_host = None
+        if prefix:
+            if target_port == 443:
+                sniffed_host = sniff.extract_sni(prefix)
+            elif target_port == 80:
+                sniffed_host = sniff.extract_http_host(prefix)
+
+        match, profile, entry = await self._prepare(target_host, target_port, peer[0], peer[1],
+                                                      self.config.settings.transparent_port,
+                                                      "transparente", match_host=sniffed_host)
+
+        if match.action_kind == "block":
+            writer.close()
+            self.log_store.update(entry.id, status="bloqueada", duration_ms=self._elapsed_ms(start))
+            return
+
+        try:
+            # Sempre discamos o IP original de verdade (nunca o hostname espiado): é exatamente
+            # o destino que o próprio aplicativo escolheu, sem risco de uma nova resolução DNS
+            # bater num servidor diferente (round-robin/CDN geolocalizado).
+            target_reader, target_writer = await self._connect_upstream(match, profile, target_host, target_port)
+            if prefix:
+                target_writer.write(prefix)
+                await target_writer.drain()
+        except Exception as exc:
+            writer.close()
+            self.log_store.update(entry.id, status="erro", error=str(exc), duration_ms=self._elapsed_ms(start))
+            return
+
+        if prefix:
+            n = len(prefix)
+            self.total_bytes_sent += n
+            if match.action_kind == "proxy":
+                self.proxy_bytes_sent += n
+            else:
+                self.direct_bytes_sent += n
+
+        self.active_connections += 1
+        self._track(writer, target_writer)
+        try:
+            sent, recv = await self._pipe(reader, writer, target_reader, target_writer, match.action_kind)
+        finally:
+            self.active_connections -= 1
+            self._untrack(writer, target_writer)
+        self.log_store.update(entry.id, status="concluida", bytes_sent=sent + len(prefix), bytes_recv=recv,
                                duration_ms=self._elapsed_ms(start))
 
     @staticmethod

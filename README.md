@@ -17,9 +17,12 @@ conexões em tempo real para você confirmar que o proxy está realmente sendo u
 4. Cada decisão fica visível, em tempo real, na página **Logs**.
 
 > Apps que ignoram completamente as configurações de proxy do sistema não são capturados no
-> modo explícito. Um modo transparente (interceptação em nível de sistema via iptables no Linux
-> e WinDivert no Windows) está esboçado em `proxy_manager/core/transparent/` para uma fase
-> futura, mas ainda não implementado.
+> modo explícito acima. Para esses casos existe o **modo transparente** (aba Configurações):
+> interceptação em nível de sistema, via `iptables` (Linux) ou o driver WinDivert/`pydivert`
+> (Windows), redirecionando qualquer conexão TCP de saída pro Proxy Manager sem o app precisar
+> cooperar. Exige rodar como root/administrador. Cobre só TCP/IPv4 — QUIC/HTTP3 (UDP) ainda
+> passa direto. Regras por domínio continuam funcionando nesse modo por meio de uma espiada
+> passiva no SNI (HTTPS) ou no cabeçalho Host (HTTP); veja `proxy_manager/core/transparent/`.
 
 ## Regras
 
@@ -64,11 +67,15 @@ em loopback) e um smoke test da interface gráfica (offscreen, sem precisar de t
 
 ## Limitações conhecidas / roadmap
 
-- Modo transparente (captura de qualquer app sem configurar proxy do sistema) ainda não
-  implementado — ver `proxy_manager/core/transparent/`.
-- SOCKS5 só resolve por domínio se o próprio app enviar o hostname (remote DNS); caso contrário,
-  o motor só enxerga o IP de destino (regras CIDR/IP ainda funcionam normalmente).
-- Sem UDP ASSOCIATE (só TCP/CONNECT), cobre a grande maioria dos usos.
+- Modo transparente cobre só TCP/IPv4. Sem suporte a UDP — QUIC/HTTP3 (usado por padrão pelo
+  Chrome em vários sites Google e CDNs) não é interceptado nem no modo transparente nem no
+  explícito; desative QUIC no navegador (`chrome://flags/#enable-quic`) se isso for um problema.
+- No modo transparente, a tradução de pacotes do Windows (WinDivert/`pydivert`) foi implementada
+  seguindo a técnica padrão de NAT em espaço de usuário, mas só pode ser validada de fato rodando
+  como Administrador numa máquina real — teste com cautela antes de depender dela no dia a dia.
+- SOCKS5 (modo explícito) só resolve por domínio se o próprio app enviar o hostname (remote DNS);
+  caso contrário, o motor só enxerga o IP de destino (regras CIDR/IP ainda funcionam normalmente).
+- Sem UDP ASSOCIATE no modo explícito (só TCP/CONNECT), cobre a grande maioria dos usos.
 - Firefox não segue automaticamente as configurações de proxy do Windows/GNOME por padrão em
   todas as instalações — pode ser necessário colar a URL do PAC manualmente em
   Configurações → Rede.

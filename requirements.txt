@@ -2,3 +2,5 @@ PySide6>=6.7
 psutil>=5.9
 platformdirs>=4.0
 keyring>=24.0
+# Só necessário pra ligar o modo transparente no Windows (driver WinDivert); ignorado em outros SOs.
+pydivert>=2.1; sys_platform == 'win32'

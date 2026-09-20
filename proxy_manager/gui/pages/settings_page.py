@@ -267,16 +267,64 @@ class SettingsPage(QWidget):
     # -- modo transparente (futuro) -----------------------------------------------
 
     def _build_transparent_card(self) -> QFrame:
-        frame, layout = _card("Modo transparente (em breve)")
-        check = QCheckBox("Capturar qualquer aplicativo sem configuração (iptables/WinDivert)")
-        check.setEnabled(False)
-        layout.addWidget(check)
+        frame, layout = _card("Modo transparente")
+        settings = self.ctx.config.settings
+
+        self.transparent_check = QCheckBox(
+            "Capturar qualquer aplicativo, mesmo sem configurar proxy nele (iptables no Linux / "
+            "WinDivert no Windows)")
+        self.transparent_check.setChecked(settings.transparent_mode_enabled)
+        layout.addWidget(self.transparent_check)
+
+        form = QFormLayout()
+        self.transparent_port_spin = QSpinBox()
+        self.transparent_port_spin.setRange(1024, 65535)
+        self.transparent_port_spin.setValue(settings.transparent_port)
+        form.addRow("Porta do listener transparente", self.transparent_port_spin)
+        layout.addLayout(form)
+
         hint = QLabel(
-            "Fase 2 do projeto: interceptação em nível de sistema, sem precisar configurar cada "
-            "app. Vai exigir privilégios de administrador/root. O modo explícito acima já garante "
-            "que qualquer app que respeite as configurações de proxy do sistema seja capturado."
+            "Intercepta a conexão em nível de sistema antes de sair do computador — funciona "
+            "mesmo com apps que ignoram completamente a configuração de proxy do SO (o que o "
+            "modo explícito acima não cobre). Exige rodar o Proxy Manager como "
+            "administrador/root. No Linux usa iptables (precisa estar instalado); no Windows "
+            "usa o driver WinDivert via o pacote 'pydivert' (pip install pydivert). Cobre só "
+            "TCP — QUIC/HTTP3 (UDP) ainda passa direto, sem ser interceptado. Liga e desliga "
+            "sozinho junto com o motor, igual à integração via PAC acima. Se o motor estiver "
+            "ativo, ele será reiniciado automaticamente ao salvar."
         )
         hint.setWordWrap(True)
         hint.setObjectName("CardHint")
         layout.addWidget(hint)
+
+        save_btn = QPushButton("Salvar")
+        save_btn.setObjectName("PrimaryButton")
+        save_btn.clicked.connect(self._on_save_transparent)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(save_btn)
+        layout.addLayout(row)
+
+        self.transparent_result_label = QLabel("")
+        self.transparent_result_label.setWordWrap(True)
+        layout.addWidget(self.transparent_result_label)
         return frame
+
+    def _on_save_transparent(self) -> None:
+        settings = self.ctx.config.settings
+        settings.transparent_mode_enabled = self.transparent_check.isChecked()
+        settings.transparent_port = self.transparent_port_spin.value()
+        was_running = self.ctx.engine.is_running()
+        if was_running:
+            self.ctx.engine.stop()
+        self.ctx.apply_config_changes()
+        if was_running:
+            self.ctx.engine.start()
+            ok = self.ctx.engine.is_running()
+            self.transparent_result_label.setText(
+                "Motor reiniciado com o modo transparente ativo." if ok else
+                "O motor não conseguiu reiniciar — veja a página Dashboard para o erro exato "
+                "(privilégio insuficiente, iptables/pydivert ausente, porta em uso, etc.).")
+        else:
+            self.transparent_result_label.setText(
+                "Configurações salvas. Serão aplicadas quando você iniciar o motor no Dashboard.")
