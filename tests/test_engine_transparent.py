@@ -1,5 +1,5 @@
 """Testes de integração do modo transparente: sobe o engine de verdade com um backend de
-transparência FALSO (nunca mexe em iptables/WinDivert de verdade, então roda em qualquer SO/CI
+transparência FALSO (nunca mexe em nftables/WinDivert de verdade, então roda em qualquer SO/CI
 sem privilégio nenhum) pra validar a wiring inteira — ciclo de vida do backend junto com o
 motor, listener transparente, sniff de SNI/Host pra regras por domínio, e o pipe até o destino
 real usando o IP original."""
@@ -43,7 +43,7 @@ def _make_transparent_engine(rules_text: str, fake_backend, default_action="bloc
 
 
 def test_transparent_backend_lifecycle_follows_engine(monkeypatch):
-    """O backend (iptables/WinDivert) precisa ligar ANTES do motor aceitar dizer que está no ar,
+    """O backend (nftables/WinDivert) precisa ligar ANTES do motor aceitar dizer que está no ar,
     e desligar como parte do stop() — nunca deixar o redirect de sistema ativo com o motor
     parado (senão qualquer app transparente ficaria sem rede nenhuma)."""
     async def scenario():

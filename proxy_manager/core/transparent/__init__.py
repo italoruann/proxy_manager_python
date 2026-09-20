@@ -1,8 +1,9 @@
-"""Modo transparente (Fase 2, futura): interceptação de tráfego no nível de sistema,
-sem exigir que o app aponte para o proxy explicitamente.
+"""Modo transparente: interceptação de tráfego no nível de sistema, sem exigir que o app aponte
+para o proxy explicitamente. Exige root/administrador; liga e desliga junto com o motor.
 
-- Linux: redirecionamento via iptables/nftables + SO_ORIGINAL_DST (estilo redsocks).
-- Windows: captura de pacotes via WinDivert (driver assinado) + tabela de conexões do SO.
+- Linux: redirecionamento via nftables + SO_ORIGINAL_DST (estilo redsocks) — ver `linux_nftables.py`.
+- Windows: captura de pacotes via WinDivert (driver assinado) + NAT em espaço de usuário — ver
+  `windows_windivert.py`.
 
-Ainda não implementado nesta versão — ver `linux_iptables.py` e `windows_windivert.py`.
+Cobre só IPv4/TCP nos dois; sem suporte a UDP (QUIC/HTTP3 continua indo direto).
 """

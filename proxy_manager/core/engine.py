@@ -31,7 +31,7 @@ class TransparentBackend(Protocol):
 def _create_transparent_backend(transparent_port: int) -> Optional[TransparentBackend]:
     system = platform.system()
     if system == "Linux":
-        from .transparent.linux_iptables import LinuxTransparentMode
+        from .transparent.linux_nftables import LinuxTransparentMode
         return LinuxTransparentMode(transparent_port)
     if system == "Windows":
         from .transparent.windows_windivert import WindowsTransparentMode
@@ -334,7 +334,7 @@ class ProxyEngine:
         self.log_store.update(entry.id, status="concluida", bytes_sent=sent, bytes_recv=recv,
                                duration_ms=self._elapsed_ms(start))
 
-    # -- Transparente (iptables REDIRECT no Linux / WinDivert no Windows) ------
+    # -- Transparente (nftables no Linux / WinDivert no Windows) ------
 
     async def _handle_transparent_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         start = time.monotonic()

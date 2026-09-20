@@ -18,7 +18,7 @@ conexões em tempo real para você confirmar que o proxy está realmente sendo u
 
 > Apps que ignoram completamente as configurações de proxy do sistema não são capturados no
 > modo explícito acima. Para esses casos existe o **modo transparente** (aba Configurações):
-> interceptação em nível de sistema, via `iptables` (Linux) ou o driver WinDivert/`pydivert`
+> interceptação em nível de sistema, via `nftables` (Linux) ou o driver WinDivert/`pydivert`
 > (Windows), redirecionando qualquer conexão TCP de saída pro Proxy Manager sem o app precisar
 > cooperar. Exige rodar como root/administrador. Cobre só TCP/IPv4 — QUIC/HTTP3 (UDP) ainda
 > passa direto. Regras por domínio continuam funcionando nesse modo por meio de uma espiada
