@@ -1,6 +1,8 @@
 """Janela principal: sidebar de navegação + páginas + ícone na bandeja do sistema."""
 from __future__ import annotations
 
+from typing import Optional
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QMainWindow, QMenu, QPushButton,
@@ -90,6 +92,13 @@ class MainWindow(QMainWindow):
     # -- bandeja do sistema -------------------------------------------------
 
     def _build_tray_icon(self) -> None:
+        self.tray: Optional[QSystemTrayIcon] = None
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            # Sem bandeja (comum no GNOME sem a extensão AppIndicator, por exemplo): não dá pra
+            # contar com ela para reabrir a janela depois. self.tray fica None e closeEvent()
+            # trata isso fechando o app de verdade, em vez de só esconder a janela.
+            return
+
         self.tray = QSystemTrayIcon(render_icon(False), self)
         self.tray.setToolTip("Proxy Manager — parado")
 
@@ -104,6 +113,8 @@ class MainWindow(QMainWindow):
         self.tray.show()
 
     def _on_status_changed_tray(self, running: bool, _message: str) -> None:
+        if self.tray is None:
+            return
         self.tray.setIcon(render_icon(running))
         self.tray_toggle_action.setText("Parar motor" if running else "Iniciar motor")
         self.tray.setToolTip(f"Proxy Manager — {'ativo' if running else 'parado'}")
@@ -128,6 +139,14 @@ class MainWindow(QMainWindow):
         QApplication.instance().quit()
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        if self.tray is None:
+            # Sem bandeja não há como reabrir a janela depois — esconder aqui deixaria o
+            # processo rodando invisível, sem nenhum jeito de voltar a ele além de matá-lo pelo
+            # terminal. Fecha de verdade, como qualquer outro programa.
+            self.ctx.engine.stop()
+            event.accept()
+            QApplication.instance().quit()
+            return
         event.ignore()
         self.hide()
         self.tray.showMessage("Proxy Manager", "Continua rodando na bandeja do sistema.",

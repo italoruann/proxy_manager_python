@@ -218,6 +218,58 @@ def test_engine_start_stop_from_dashboard(window):
     assert not page.ctx.engine.is_running()
 
 
+class _FakeCloseEvent:
+    def __init__(self):
+        self.accepted = False
+        self.ignored = False
+
+    def accept(self):
+        self.accepted = True
+
+    def ignore(self):
+        self.ignored = True
+
+
+def test_close_without_tray_stops_engine_and_quits_app(window, app, monkeypatch):
+    """Regressão: sem bandeja do sistema (GNOME sem extensão, por exemplo), só esconder a janela
+    ao fechar deixaria o processo rodando sem nenhum jeito de reabri-lo. Fechar precisa fechar
+    de verdade."""
+    window.tray = None
+    stop_calls = []
+    monkeypatch.setattr(window.ctx.engine, "stop", lambda: stop_calls.append(True))
+    quit_calls = []
+    monkeypatch.setattr(app, "quit", lambda: quit_calls.append(True))
+
+    event = _FakeCloseEvent()
+    window.closeEvent(event)
+
+    assert stop_calls == [True]
+    assert quit_calls == [True]
+    assert event.accepted is True
+    assert event.ignored is False
+
+
+def test_close_with_tray_hides_window_instead_of_quitting(window, monkeypatch):
+    """Com bandeja disponível, o comportamento de sempre continua valendo: esconder, não fechar."""
+    hide_calls = []
+    monkeypatch.setattr(window, "hide", lambda: hide_calls.append(True))
+    message_calls = []
+
+    class _FakeTray:
+        def showMessage(self, *args, **kwargs):
+            message_calls.append((args, kwargs))
+
+    window.tray = _FakeTray()
+
+    event = _FakeCloseEvent()
+    window.closeEvent(event)
+
+    assert hide_calls == [True]
+    assert message_calls
+    assert event.ignored is True
+    assert event.accepted is False
+
+
 def test_system_integration_follows_engine_lifecycle(window, monkeypatch):
     """Regressão: a integração com o sistema (PAC) precisa ligar/desligar sozinha junto com o
     motor, senão o SO fica preso apontando para um proxy morto depois que o motor para, deixando

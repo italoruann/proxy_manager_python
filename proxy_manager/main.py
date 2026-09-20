@@ -5,7 +5,7 @@ import sys
 
 
 def main() -> None:
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
     from .gui.app_context import AppContext
     from .gui.icon import render_icon
@@ -22,7 +22,9 @@ def main() -> None:
     window = MainWindow(ctx)
 
     start_minimized = "--start-minimized" in sys.argv or ctx.config.settings.start_minimized
-    if not start_minimized:
+    # Sem bandeja do sistema (comum no GNOME sem extensão), iniciar minimizado deixaria o
+    # processo rodando sem nenhuma janela e sem ícone algum para reabri-lo.
+    if not start_minimized or not QSystemTrayIcon.isSystemTrayAvailable():
         window.show()
 
     sys.exit(app.exec())
