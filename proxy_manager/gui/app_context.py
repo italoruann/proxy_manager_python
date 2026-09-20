@@ -1,0 +1,117 @@
+"""Estado compartilhado da aplicação: config, log store e o motor, expostos à GUI via sinais Qt
+thread-safe (o motor roda em outra thread; os callbacks viram Signal.emit aqui)."""
+from __future__ import annotations
+
+import threading
+
+from PySide6.QtCore import QObject, QTimer, Signal
+
+from ..core import system_integration
+from ..core.config import AppConfig, load_config, save_config
+from ..core.engine import ProxyEngine
+from ..core.logstore import LogEntry, LogStore
+from .log_model import LogTableModel
+
+# Sob carga (uma página com muitas conexões simultâneas), o motor pode gerar dezenas de eventos
+# de log por segundo. Emitir um sinal Qt por evento, cruzando threads, tem um custo perceptível
+# e deixava a interface travando. Em vez disso, o motor só enfileira; um QTimer no thread da
+# GUI drena o que se acumulou a cada FLUSH_INTERVAL_MS e atualiza a tabela em lote.
+FLUSH_INTERVAL_MS = 200
+
+
+class AppContext(QObject):
+    log_added = Signal(list)
+    log_updated = Signal(list)
+    status_changed = Signal(bool, str)
+    config_changed = Signal()
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.config: AppConfig = load_config()
+        self.log_store = LogStore(retention_days=self.config.settings.log_retention_days)
+        self.engine = ProxyEngine(self.config, self.log_store)
+        self.engine.on_status_change = self._on_status
+        self.log_store.subscribe(self._on_log_event)
+
+        self._pending_lock = threading.Lock()
+        self._pending_added: list[LogEntry] = []
+        self._pending_updated: dict[str, LogEntry] = {}
+
+        self.log_model = LogTableModel()
+        self.log_model.load_initial(list(reversed(self.log_store.recent())))
+        self.log_added.connect(self.log_model.add_entries)
+        self.log_updated.connect(self.log_model.update_entries)
+
+        self._flush_timer = QTimer(self)
+        self._flush_timer.setInterval(FLUSH_INTERVAL_MS)
+        self._flush_timer.timeout.connect(self._flush_pending)
+        self._flush_timer.start()
+
+        if self.config.settings.system_integration_enabled:
+            # Se a última sessão terminou de forma abrupta (crash, "Finalizar tarefa" etc.) com a
+            # integração ligada, o Windows/Linux pode ter ficado apontando para um PAC que não
+            # existe mais (o motor ainda nem subiu neste momento) — isso deixa QUALQUER conexão
+            # de rede lenta até alguém remover manualmente. Como rede de segurança, limpamos essa
+            # configuração agora (síncrono: acontece antes da janela aparecer); ela volta sozinha
+            # assim que o motor for iniciado de novo.
+            self._sync_system_proxy(applying=False)
+
+    def _on_log_event(self, event: str, entry: LogEntry) -> None:
+        # Chamado na thread do motor: só enfileira, sem tocar em nada do Qt aqui.
+        with self._pending_lock:
+            if event == "added":
+                self._pending_added.append(entry)
+            else:
+                self._pending_updated[entry.id] = entry
+
+    def _flush_pending(self) -> None:
+        with self._pending_lock:
+            if not self._pending_added and not self._pending_updated:
+                return
+            added, self._pending_added = self._pending_added, []
+            updated = list(self._pending_updated.values())
+            self._pending_updated = {}
+        if added:
+            self.log_added.emit(added)
+        if updated:
+            self.log_updated.emit(updated)
+
+    def _on_status(self, running: bool, message: str) -> None:
+        self.status_changed.emit(running, message)
+        # A integração com o sistema (PAC) segue o motor automaticamente: se ligarmos o proxy
+        # do sistema e depois o motor for parado (ou travar) sem desligar essa configuração, o
+        # SO fica preso apontando para um proxy morto e a internet inteira parece lenta. Ligando
+        # e desligando junto com o motor, esse estado inconsistente nunca acontece.
+        if self.config.settings.system_integration_enabled:
+            self._sync_system_proxy(applying=running)
+
+    def _sync_system_proxy(self, applying: bool) -> None:
+        """Chamada de forma SÍNCRONA e bloqueante, de propósito.
+
+        Isso já foi uma thread em background (para não travar nada). O problema: se o usuário
+        parasse o motor e fechasse o app logo em seguida, o processo podia terminar (matando a
+        thread) antes da chamada de registro/subprocess completar — deixando o Windows/Linux
+        preso apontando para um PAC morto mesmo com o app "tendo removido" a configuração.
+        É seguro bloquear aqui: essa função só é chamada bem no início do motor (antes de haver
+        qualquer conexão para atender) ou bem no fim (depois de todas as conexões já terem sido
+        encerradas em _shutdown), então uma pausa de alguns milissegundos não afeta tráfego real.
+        """
+        settings = self.config.settings
+        try:
+            if applying:
+                system_integration.apply_system_proxy(
+                    system_integration.pac_url(settings.pac_port), settings.http_port)
+            else:
+                system_integration.remove_system_proxy()
+        except Exception:
+            pass
+
+    def save(self) -> None:
+        save_config(self.config)
+
+    def apply_config_changes(self) -> None:
+        """Chamar depois de qualquer edição em self.config (proxies/regras/settings)."""
+        self.engine.update_config(self.config)
+        self.log_store.retention_days = self.config.settings.log_retention_days
+        self.save()
+        self.config_changed.emit()

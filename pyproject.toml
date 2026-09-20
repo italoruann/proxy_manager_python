@@ -1,0 +1,24 @@
+[project]
+name = "proxy-manager"
+version = "0.1.0"
+description = "Gerenciador de proxy multiplataforma com regras avançadas por aplicativo e domínio, inspirado no Proxifier."
+requires-python = ">=3.10"
+dependencies = [
+    "PySide6>=6.7",
+    "psutil>=5.9",
+    "platformdirs>=4.0",
+    "keyring>=24.0",
+]
+
+[project.scripts]
+proxy-manager = "proxy_manager.main:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["proxy_manager*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

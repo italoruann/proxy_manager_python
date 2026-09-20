@@ -1,0 +1,251 @@
+"""Smoke test da GUI: sobe a janela principal (offscreen) e navega por todas as páginas,
+exercitando as ações mais comuns, para pegar erros de import/layout/sinal sem precisar de
+interação visual manual."""
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+import tempfile
+
+import pytest
+
+TMP_CONFIG_DIR = tempfile.mkdtemp(prefix="proxy_manager_test_")
+# No Windows, platformdirs resolve a pasta local via ctypes/registro (SHGetKnownFolderPath),
+# IGNORANDO a variável de ambiente LOCALAPPDATA — só respeita o override oficial abaixo.
+# Sem isso, os testes de GUI acabariam lendo/escrevendo na config REAL do usuário.
+os.environ["WIN_PD_OVERRIDE_LOCAL_APPDATA"] = TMP_CONFIG_DIR
+os.environ["WIN_PD_OVERRIDE_APPDATA"] = TMP_CONFIG_DIR
+os.environ["XDG_CONFIG_HOME"] = TMP_CONFIG_DIR
+os.environ["XDG_DATA_HOME"] = TMP_CONFIG_DIR
+
+from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtTest import QTest
+
+from proxy_manager.core.rules import RuleSet
+from proxy_manager.gui.app_context import AppContext
+from proxy_manager.gui.main_window import MainWindow
+
+# Evita que caixas de diálogo modais (QMessageBox) travem o teste esperando um clique humano.
+QMessageBox.information = staticmethod(lambda *a, **k: None)
+QMessageBox.warning = staticmethod(lambda *a, **k: None)
+QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
+
+
+@pytest.fixture(scope="module")
+def app():
+    return QApplication.instance() or QApplication([])
+
+
+@pytest.fixture()
+def window(app):
+    ctx = AppContext()
+    win = MainWindow(ctx)
+    yield win
+    ctx.engine.stop()
+    win.close()
+
+
+def test_window_builds_and_navigates_all_pages(window):
+    assert window.stack.count() == 5
+    for i in range(window.stack.count()):
+        window.nav_buttons[i].click()
+        assert window.stack.currentIndex() == i
+
+
+def test_add_and_remove_proxy_profile(window):
+    window.nav_buttons[1].click()
+    page = window.proxies_page
+    initial_count = len(page.ctx.config.proxies)
+
+    page._on_new()
+    assert len(page.ctx.config.proxies) == initial_count + 1
+
+    page.host_edit.setText("proxy.example.com")
+    page.port_spin.setValue(1080)
+    page._on_save()
+    assert page.ctx.config.proxies[-1].host == "proxy.example.com"
+
+
+def test_rules_table_round_trip(window):
+    window.nav_buttons[2].click()
+    page = window.rules_page
+    initial_rows = page.table.rowCount()
+
+    page._on_add_row()
+    page.table.item(initial_rows, 2).setText("*.example.com")
+    page._on_save_table()
+
+    assert "*.example.com" in page.ctx.config.rules_text
+
+
+def test_add_app_catchall_button_creates_wildcard_rule(window):
+    """O botão '+ App com proxy padrão' precisa criar uma regra alvo='*' pronta para o usuário
+    só digitar o nome do executável — atalho para 'todo o Chrome pelo proxy'."""
+    window.nav_buttons[2].click()
+    page = window.rules_page
+    row = page.table.rowCount()
+
+    page._on_add_app_catchall()
+    assert page.table.item(row, 2).text() == "*"
+
+    page.table.item(row, 1).setText("chrome.exe")
+    page.table.setCurrentCell(row, 2)  # sai do modo de edição da célula de Aplicativos
+
+    rule_set = page._rule_set_from_table()
+    new_rule = rule_set.rules[-1]
+    assert new_rule.apps == ["chrome.exe"]
+    assert new_rule.pattern == "*"
+    assert new_rule.action == "proxy"
+
+
+def test_add_app_button_disabled_until_executable_chosen(window):
+    """Regressão: um usuário clicou em 'Procurar...' mas nunca em '+ Adicionar' (não ficava
+    óbvio que eram dois passos), então o app nunca foi salvo de verdade. O botão agora começa
+    desabilitado e só liga quando há um caminho de executável preenchido."""
+    window.nav_buttons[2].click()
+    page = window.rules_page
+    assert not page.add_app_def_btn.isEnabled()
+
+    page.app_path_edit.setText(r"C:\Chrome\chrome.exe")
+    assert page.add_app_def_btn.isEnabled()
+
+    page.app_path_edit.clear()
+    assert not page.add_app_def_btn.isEnabled()
+
+
+def test_add_app_definition_appears_in_apps_table(window):
+    window.nav_buttons[2].click()
+    page = window.rules_page
+    initial_rows = page.apps_table.rowCount()
+
+    page.app_name_edit.setText("Chrome")
+    page.app_path_edit.setText(r"C:\Chrome\chrome.exe")
+    page._on_add_app_definition()
+
+    assert page.apps_table.rowCount() == initial_rows + 1
+    assert page.ctx.config.apps[-1].name == "Chrome"
+    assert page.ctx.config.apps[-1].process_name == "chrome.exe"
+    # os campos do formulário devem ser limpos após adicionar, prontos pro próximo cadastro
+    assert page.app_name_edit.text() == ""
+    assert page.app_path_edit.text() == ""
+
+
+def test_add_app_definition_creates_catchall_rule_when_none_exists(window):
+    """Regressão: cadastrar um app sem nenhuma regra pra ele precisa capturar TODO o tráfego
+    daquele app pelo proxy automaticamente (igual ao Proxifier) — não pode ficar em silêncio
+    passando direto até o usuário escrever uma regra manualmente."""
+    window.nav_buttons[2].click()
+    page = window.rules_page
+
+    page.app_name_edit.setText("Chrome")
+    page.app_path_edit.setText(r"C:\Chrome\chrome.exe")
+    page._on_add_app_definition()
+
+    rule_set = RuleSet.parse(page.ctx.config.rules_text)
+    match = rule_set.match("chrome.exe", r"C:\Chrome\chrome.exe", "qualquerdominio.com", None,
+                            default_action="direct")
+    assert match.action_kind == "proxy"
+
+
+def test_add_app_definition_does_not_duplicate_existing_rule(window):
+    window.nav_buttons[2].click()
+    page = window.rules_page
+
+    page.ctx.config.rules_text = "apps: chrome.exe\n*.paypal.com +direct\n"
+    page.ctx.apply_config_changes()
+
+    page.app_name_edit.setText("Chrome")
+    page.app_path_edit.setText(r"C:\Chrome\chrome.exe")
+    page._on_add_app_definition()
+
+    rule_set = RuleSet.parse(page.ctx.config.rules_text)
+    chrome_rules = [r for r in rule_set.rules if "chrome.exe" in r.apps]
+    assert len(chrome_rules) == 1  # não deve ter criado uma segunda regra pra esse app
+
+
+def test_add_app_catchall_offers_registered_apps_instead_of_free_typing(window, monkeypatch):
+    """Com pelo menos um aplicativo já cadastrado, o botão '+ App com proxy padrão' deve deixar
+    escolher ele numa lista, em vez de abrir a célula para digitação manual."""
+    from PySide6.QtWidgets import QInputDialog
+
+    window.nav_buttons[2].click()
+    page = window.rules_page
+
+    page.app_name_edit.setText("Chrome")
+    page.app_path_edit.setText(r"C:\Chrome\chrome.exe")
+    page._on_add_app_definition()
+
+    monkeypatch.setattr(QInputDialog, "getItem", staticmethod(lambda *a, **k: (a[3][0], True)))
+
+    row = page.table.rowCount()
+    page._on_add_app_catchall()
+
+    assert page.table.item(row, 1).text() == "chrome.exe"
+    assert page.table.item(row, 2).text() == "*"
+
+
+def test_logs_page_filters_do_not_crash(window):
+    window.nav_buttons[3].click()
+    page = window.logs_page
+    page.search_edit.setText("azure")
+    page.action_combo.setCurrentIndex(1)
+    page.protocol_combo.setCurrentIndex(1)
+    page.search_edit.setText("")
+
+
+def test_settings_page_toggles(window):
+    window.nav_buttons[4].click()
+    page = window.settings_page
+    page.default_action_combo.setCurrentIndex(1)
+    assert page.ctx.config.settings.default_action == "block"
+    page.retention_spin.setValue(30)
+    assert page.ctx.config.settings.log_retention_days == 30
+
+
+def test_engine_start_stop_from_dashboard(window):
+    window.nav_buttons[0].click()
+    page = window.dashboard_page
+    page.ctx.config.settings.socks_port = 58480
+    page.ctx.config.settings.http_port = 58481
+    page.ctx.config.settings.pac_port = 58490
+
+    page._on_toggle_clicked()
+    QTest.qWait(300)
+    assert page.ctx.engine.is_running()
+
+    page._on_toggle_clicked()
+    QTest.qWait(300)
+    assert not page.ctx.engine.is_running()
+
+
+def test_system_integration_follows_engine_lifecycle(window, monkeypatch):
+    """Regressão: a integração com o sistema (PAC) precisa ligar/desligar sozinha junto com o
+    motor, senão o SO fica preso apontando para um proxy morto depois que o motor para, deixando
+    a internet inteira lenta.
+
+    Sem QTest.qWait() de propósito: a remoção precisa ter acontecido de forma SÍNCRONA, antes de
+    engine.stop() retornar. Uma versão antiga disparava isso numa thread em background — se o
+    processo fosse encerrado logo em seguida (fechar o app assim que parar o motor), a thread
+    podia morrer antes de terminar e a configuração do sistema nunca era revertida de verdade.
+    Um teste com qWait(300) não pegaria essa regressão, porque a thread tinha tempo de sobra
+    para terminar durante o teste (e nenhum tempo de sobra no cenário real do usuário)."""
+    from proxy_manager.core import system_integration
+
+    calls = []
+    monkeypatch.setattr(system_integration, "apply_system_proxy",
+                         lambda url, port: calls.append(("apply", url, port)) or (True, "ok"))
+    monkeypatch.setattr(system_integration, "remove_system_proxy",
+                         lambda: calls.append(("remove",)) or (True, "ok"))
+
+    ctx = window.ctx
+    ctx.config.settings.system_integration_enabled = True
+    ctx.config.settings.socks_port = 58680
+    ctx.config.settings.http_port = 58681
+    ctx.config.settings.pac_port = 58690
+
+    ctx.engine.start()
+    assert any(c[0] == "apply" for c in calls), "deveria aplicar o proxy do sistema antes de start() retornar"
+
+    calls.clear()
+    ctx.engine.stop()
+    assert any(c[0] == "remove" for c in calls), "deveria remover o proxy do sistema antes de stop() retornar"
