@@ -21,6 +21,10 @@ class _FakePacket:
         self.dst_addr = dst_addr
         self.dst_port = dst_port
         self.tcp = tcp
+        self.checksums_recalculated = False
+
+    def recalculate_checksums(self):
+        self.checksums_recalculated = True
 
 
 def test_new_outbound_syn_is_redirected_and_tracked():
@@ -28,8 +32,9 @@ def test_new_outbound_syn_is_redirected_and_tracked():
     packet = _FakePacket(is_outbound=True, src_addr="192.168.1.50", dst_addr="203.0.113.10",
                           dst_port=443, tcp=_FakeTcp(src_port=53211, syn=True, ack=False))
 
-    backend._translate(packet)
+    changed = backend._translate(packet)
 
+    assert changed is True
     assert packet.dst_addr == "127.0.0.1"
     assert packet.dst_port == 58095
     assert backend.resolve_destination(writer=None, peer_port=53211) == ("203.0.113.10", 443)
@@ -57,8 +62,9 @@ def test_outbound_packet_of_untracked_flow_is_left_alone():
     packet = _FakePacket(is_outbound=True, src_addr="192.168.1.50", dst_addr="203.0.113.10",
                           dst_port=443, tcp=_FakeTcp(src_port=53211, syn=False, ack=True))
 
-    backend._translate(packet)
+    changed = backend._translate(packet)
 
+    assert changed is False
     assert packet.dst_addr == "203.0.113.10"
     assert packet.dst_port == 443
 
@@ -72,8 +78,9 @@ def test_inbound_reply_from_local_listener_has_source_restored():
     reply = _FakePacket(is_outbound=False, src_addr="127.0.0.1", dst_addr="192.168.1.50",
                          dst_port=53211, tcp=_FakeTcp(src_port=58095))
     reply.tcp.dst_port = 53211
-    backend._translate(reply)
+    changed = backend._translate(reply)
 
+    assert changed is True
     assert reply.src_addr == "203.0.113.10"
     assert reply.tcp.src_port == 443
 
@@ -90,6 +97,37 @@ def test_flow_is_untracked_after_fin_to_avoid_unbounded_growth():
     backend._translate(fin)
 
     assert backend.resolve_destination(writer=None, peer_port=53211) is None
+
+
+def test_capture_loop_recalculates_checksums_only_when_packet_changed():
+    """Reescrever IP/porta invalida os checksums originais — sem recalcular, o pacote pode ser
+    descartado silenciosamente por quem o recebe. Só precisa disso quando algo foi alterado."""
+    backend = WindowsTransparentMode(transparent_port=58095)
+    changed_packet = _FakePacket(is_outbound=True, src_addr="192.168.1.50", dst_addr="203.0.113.10",
+                                  dst_port=443, tcp=_FakeTcp(src_port=53211, syn=True))
+    unchanged_packet = _FakePacket(is_outbound=True, src_addr="192.168.1.50", dst_addr="203.0.113.10",
+                                    dst_port=443, tcp=_FakeTcp(src_port=9999, syn=False, ack=True))
+
+    sent = []
+
+    class _FakeHandle:
+        def __init__(self):
+            self._queue = [changed_packet, unchanged_packet]
+
+        def recv(self):
+            if not self._queue:
+                raise OSError("closed")
+            return self._queue.pop(0)
+
+        def send(self, packet):
+            sent.append(packet)
+
+    backend._handle = _FakeHandle()
+    backend._capture_loop()
+
+    assert sent == [changed_packet, unchanged_packet]
+    assert changed_packet.checksums_recalculated is True
+    assert unchanged_packet.checksums_recalculated is False
 
 
 def test_resolve_destination_returns_none_for_unknown_port():

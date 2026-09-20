@@ -103,17 +103,23 @@ class WindowsTransparentMode:
             except OSError:
                 break  # handle fechado por stop()
 
-            self._translate(packet)
+            if self._translate(packet):
+                # Reescrever IP/porta invalida os checksums de IP/TCP originais — sem recalcular,
+                # a pilha de rede de quem recebe o pacote (inclusive a nossa própria, do lado do
+                # listener local) pode descartá-lo silenciosamente por checksum inválido.
+                packet.recalculate_checksums()
 
             try:
                 self._handle.send(packet)
             except OSError:
                 break
 
-    def _translate(self, packet) -> None:
+    def _translate(self, packet) -> bool:
+        """Reescreve o pacote (endereço/porta) quando necessário. Retorna True se algo foi
+        alterado, pra quem chamar saber que precisa recalcular os checksums antes de reenviar."""
         tcp = packet.tcp
         if tcp is None:
-            return
+            return False
 
         if packet.is_outbound:
             with self._lock:
@@ -129,6 +135,7 @@ class WindowsTransparentMode:
                 if tcp.fin or tcp.rst:
                     with self._lock:
                         self._nat_table.pop(tcp.src_port, None)
+                return True
         else:
             # Resposta vinda do nosso próprio listener local (127.0.0.1:transparent_port),
             # endereçada de volta ao processo que originou a conexão redirecionada.
@@ -137,3 +144,5 @@ class WindowsTransparentMode:
                     original = self._nat_table.get(tcp.dst_port)
                 if original is not None:
                     packet.src_addr, tcp.src_port = original
+                    return True
+        return False
