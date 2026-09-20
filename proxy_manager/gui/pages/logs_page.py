@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..app_context import AppContext
-from ..log_model import ACTION_LABELS, COLUMNS, LogTableModel
+from ..log_model import ACTION_LABELS, COLUMNS, SORT_ROLE, LogTableModel
 
 
 class LogFilterProxy(QSortFilterProxyModel):
@@ -21,6 +21,17 @@ class LogFilterProxy(QSortFilterProxyModel):
         self._text = ""
         self._action = "all"
         self._protocol = "all"
+
+    def lessThan(self, left, right) -> bool:  # noqa: N802
+        # DisplayRole é sempre string formatada ("1.2 KB", "230 ms") — ordenar por ela daria
+        # ordem alfabética em vez de numérica. SORT_ROLE expõe o valor bruto pras colunas que
+        # precisam disso (Hora, PID, Enviado, Recebido, Duração).
+        left_value = self.sourceModel().data(left, SORT_ROLE)
+        right_value = self.sourceModel().data(right, SORT_ROLE)
+        try:
+            return left_value < right_value
+        except TypeError:
+            return str(left_value) < str(right_value)
 
     def set_text_filter(self, text: str) -> None:
         self._text = text.strip().lower()
@@ -114,6 +125,11 @@ class LogsPage(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        self.table.setSortingEnabled(True)
+        # Ordem inicial: mais recente primeiro (igual ao comportamento de sempre, antes de
+        # ordenação existir) — clicar em qualquer cabeçalho de coluna troca pra ela, e clicar de
+        # novo inverte crescente/decrescente.
+        self.table.sortByColumn(0, Qt.SortOrder.DescendingOrder)
         root.addWidget(self.table, 1)
 
         self.count_label = QLabel()

@@ -13,6 +13,11 @@ from .theme import PALETTE
 COLUMNS = ["Hora", "Processo", "PID", "Destino", "Protocolo", "Regra", "Ação", "Proxy",
            "Enviado", "Recebido", "Duração", "Status"]
 
+# Papel próprio pra ordenação: DisplayRole é sempre uma string formatada ("1.2 KB", "230 ms",
+# "01:04:59"), o que ordenaria por ordem alfabética em vez de numérica/cronológica. Colunas
+# numéricas expõem aqui o valor bruto (int/float); as demais caem de volta pro texto exibido.
+SORT_ROLE = Qt.ItemDataRole.UserRole + 1
+
 ACTION_LABELS = {"direct": "Direto", "proxy": "Via proxy", "block": "Bloqueado"}
 STATUS_LABELS = {"ativa": "Em andamento", "concluida": "Concluída", "erro": "Erro", "bloqueada": "Bloqueada"}
 
@@ -63,6 +68,8 @@ class LogTableModel(QAbstractTableModel):
         col = index.column()
         if role == Qt.ItemDataRole.DisplayRole:
             return self._display_value(entry, col)
+        if role == SORT_ROLE:
+            return self._sort_value(entry, col)
         if role == Qt.ItemDataRole.ForegroundRole and col in (6, 11):
             color_map = _ACTION_COLOR if col == 6 else _STATUS_COLOR
             key = entry.action if col == 6 else entry.status
@@ -104,6 +111,20 @@ class LogTableModel(QAbstractTableModel):
         if col == 11:
             return STATUS_LABELS.get(entry.status, entry.status)
         return ""
+
+    @staticmethod
+    def _sort_value(entry: LogEntry, col: int):
+        if col == 0:
+            return entry.timestamp
+        if col == 2:
+            return entry.pid
+        if col == 8:
+            return entry.bytes_sent
+        if col == 9:
+            return entry.bytes_recv
+        if col == 10:
+            return entry.duration_ms
+        return LogTableModel._display_value(entry, col)
 
     def entry_at(self, row: int) -> LogEntry | None:
         if 0 <= row < len(self._rows):

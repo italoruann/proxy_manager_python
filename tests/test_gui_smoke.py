@@ -18,10 +18,12 @@ os.environ["WIN_PD_OVERRIDE_APPDATA"] = TMP_CONFIG_DIR
 os.environ["XDG_CONFIG_HOME"] = TMP_CONFIG_DIR
 os.environ["XDG_DATA_HOME"] = TMP_CONFIG_DIR
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtTest import QTest
 
 from proxy_manager.core.config import ProxyProfile
+from proxy_manager.core.logstore import LogEntry
 from proxy_manager.core.rules import RuleSet
 from proxy_manager.gui.app_context import AppContext
 from proxy_manager.gui.main_window import MainWindow
@@ -214,6 +216,32 @@ def test_logs_page_filters_do_not_crash(window):
     page.action_combo.setCurrentIndex(1)
     page.protocol_combo.setCurrentIndex(1)
     page.search_edit.setText("")
+
+
+def test_logs_page_columns_are_sortable(window):
+    """Regressão: a tabela de logs nunca tinha setSortingEnabled(True) — clicar num cabeçalho de
+    coluna não fazia absolutamente nada. E, porque DisplayRole é sempre uma string já formatada
+    ("1.2 KB", "230 ms"), ordenar por ela dava ordem alfabética em vez de numérica."""
+    window.nav_buttons[3].click()
+    page = window.logs_page
+    assert page.table.isSortingEnabled()
+
+    for host, duration_ms, bytes_sent in (("a.com", 1453, 800), ("b.com", 50, 1200), ("c.com", 200, 5000)):
+        page.ctx.log_model.add_entries([LogEntry(dst_host=host, duration_ms=duration_ms,
+                                                   bytes_sent=bytes_sent, status="concluida")])
+
+    def column_values(col: int) -> list[str]:
+        return [page.proxy_model.data(page.proxy_model.index(row, col))
+                for row in range(page.proxy_model.rowCount())]
+
+    page.table.sortByColumn(10, Qt.SortOrder.AscendingOrder)  # Duração
+    assert column_values(10) == ["50 ms", "200 ms", "1453 ms"]
+
+    page.table.sortByColumn(10, Qt.SortOrder.DescendingOrder)
+    assert column_values(10) == ["1453 ms", "200 ms", "50 ms"]
+
+    page.table.sortByColumn(8, Qt.SortOrder.AscendingOrder)  # Enviado (bytes)
+    assert column_values(8) == ["800 B", "1.2 KB", "4.9 KB"]
 
 
 def test_settings_page_toggles(window):
