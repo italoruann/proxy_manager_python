@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import platform
+import subprocess
 import sys
 from pathlib import Path
 
@@ -34,30 +35,35 @@ def set_enabled(enabled: bool) -> tuple[bool, str]:
 
 def _is_enabled_windows() -> bool:
     try:
-        import winreg
-        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ) as key:
-            winreg.QueryValueEx(key, APP_ID)
-            return True
-    except OSError:
+        result = subprocess.run(["schtasks", "/Query", "/TN", APP_ID], capture_output=True, timeout=5)
+        return result.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
         return False
 
 
 def _set_windows(enabled: bool) -> tuple[bool, str]:
+    # Usa o Agendador de Tarefas (schtasks /RL HIGHEST), não a chave Run do registro: itens da
+    # chave Run sobem sem privilégio nenhum no login, e o executável empacotado pede elevação
+    # (UAC) sempre que é aberto — na chave Run ele simplesmente nunca conseguiria iniciar sozinho.
     try:
-        import winreg
-        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE) as key:
-            if enabled:
-                winreg.SetValueEx(key, APP_ID, 0, winreg.REG_SZ, _launch_command())
-            else:
-                try:
-                    winreg.DeleteValue(key, APP_ID)
-                except FileNotFoundError:
-                    pass
-        return True, "Início automático atualizado."
-    except OSError as exc:
-        return False, f"Falha ao atualizar o registro: {exc}"
+        if enabled:
+            result = subprocess.run(
+                ["schtasks", "/Create", "/TN", APP_ID, "/TR", _launch_command(),
+                 "/SC", "ONLOGON", "/RL", "HIGHEST", "/F"],
+                capture_output=True, timeout=5,
+            )
+        else:
+            result = subprocess.run(["schtasks", "/Delete", "/TN", APP_ID, "/F"],
+                                     capture_output=True, timeout=5)
+            if result.returncode != 0:
+                return True, "Início automático já estava desabilitado."
+
+        if result.returncode != 0:
+            stderr = result.stderr.decode(errors="replace").strip()
+            return False, f"Falha ao atualizar a tarefa agendada: {stderr}"
+        return True, "Início automático atualizado (tarefa agendada, roda elevado no login)."
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"Falha ao atualizar a tarefa agendada: {exc}"
 
 
 def _autostart_desktop_file() -> Path:

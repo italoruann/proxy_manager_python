@@ -7,3 +7,6 @@ build/
 dist/
 .vscode/
 *.log
+# Gerados por packaging/generate_icon.py a cada build; não precisam ficar versionados.
+packaging/icon.ico
+packaging/icon.png
