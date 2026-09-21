@@ -380,10 +380,25 @@ class ProxyEngine:
 
         entry = self.log_store.add(LogEntry(
             pid=proc.pid, process_name=proc.name, process_path=proc.path, protocol=protocol,
-            dst_host=host_for_rules, dst_port=target_port, matched_rule=self._rule_label(match),
-            action=match.action_kind, proxy_used=proxy_label,
+            dst_host=host_for_rules, dst_ip=ip_literal or "", dst_port=target_port,
+            matched_rule=self._rule_label(match), action=match.action_kind, proxy_used=proxy_label,
         ))
+        if ip_literal is None:
+            # target_host é um domínio (não um IP literal): resolve em segundo plano só pra
+            # exibir no log, sem atrasar a conexão nem o roteamento — vale tanto pra "direct"
+            # quanto pra "proxy" (nesse último caso é o IP que o resolvedor local vê; o proxy
+            # upstream pode resolver o mesmo domínio pra um IP diferente, ex.: CDN geolocalizado).
+            asyncio.ensure_future(self._resolve_dst_ip(entry.id, target_host))
         return match, profile, entry
+
+    async def _resolve_dst_ip(self, entry_id: str, host: str) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+            infos = await asyncio.wait_for(loop.getaddrinfo(host, None), timeout=2.0)
+        except Exception:
+            return
+        if infos:
+            self.log_store.update(entry_id, dst_ip=infos[0][4][0])
 
     async def _connect_upstream(self, match: MatchResult, profile: Optional[ProxyProfile],
                                  target_host: str, target_port: int):

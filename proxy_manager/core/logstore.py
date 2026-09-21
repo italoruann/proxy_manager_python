@@ -25,6 +25,7 @@ class LogEntry:
     process_path: str = ""
     protocol: str = ""  # "socks5" | "http"
     dst_host: str = ""
+    dst_ip: str = ""
     dst_port: int = 0
     matched_rule: str = ""
     action: str = ""  # "direct" | "block" | "proxy"
@@ -57,6 +58,7 @@ class LogStore:
                     process_path TEXT,
                     protocol TEXT,
                     dst_host TEXT,
+                    dst_ip TEXT,
                     dst_port INTEGER,
                     matched_rule TEXT,
                     action TEXT,
@@ -69,6 +71,11 @@ class LogStore:
                 )
             """)
             con.execute("CREATE INDEX IF NOT EXISTS idx_connections_ts ON connections(timestamp)")
+            # Migração pra bancos criados antes do campo dst_ip existir: CREATE TABLE IF NOT
+            # EXISTS não adiciona coluna em tabela já existente.
+            existing_cols = {row[1] for row in con.execute("PRAGMA table_info(connections)")}
+            if "dst_ip" not in existing_cols:
+                con.execute("ALTER TABLE connections ADD COLUMN dst_ip TEXT DEFAULT ''")
         self._prune_old()
 
     def _connect(self) -> sqlite3.Connection:
@@ -125,13 +132,19 @@ class LogStore:
     def _persist(self, entry: LogEntry) -> None:
         try:
             with self._connect() as con:
+                # Colunas nomeadas explicitamente (em vez de posicionais): bancos migrados via
+                # ALTER TABLE ADD COLUMN (ver _init_db) têm a coluna nova no fim da tabela, não
+                # na posição em que ela aparece no CREATE TABLE / dataclass.
                 con.execute(
-                    """INSERT OR REPLACE INTO connections VALUES
-                    (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    """INSERT OR REPLACE INTO connections
+                    (id, timestamp, pid, process_name, process_path, protocol, dst_host, dst_ip,
+                     dst_port, matched_rule, action, proxy_used, bytes_sent, bytes_recv,
+                     duration_ms, status, error)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (entry.id, entry.timestamp, entry.pid, entry.process_name, entry.process_path,
-                     entry.protocol, entry.dst_host, entry.dst_port, entry.matched_rule, entry.action,
-                     entry.proxy_used, entry.bytes_sent, entry.bytes_recv, entry.duration_ms,
-                     entry.status, entry.error),
+                     entry.protocol, entry.dst_host, entry.dst_ip, entry.dst_port, entry.matched_rule,
+                     entry.action, entry.proxy_used, entry.bytes_sent, entry.bytes_recv,
+                     entry.duration_ms, entry.status, entry.error),
                 )
         except sqlite3.Error:
             pass

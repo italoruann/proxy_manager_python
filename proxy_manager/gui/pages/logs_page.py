@@ -55,7 +55,7 @@ class LogFilterProxy(QSortFilterProxyModel):
         if self._protocol != "all" and entry.protocol != self._protocol:
             return False
         if self._text:
-            haystack = f"{entry.process_name} {entry.process_path} {entry.dst_host} " \
+            haystack = f"{entry.process_name} {entry.process_path} {entry.dst_host} {entry.dst_ip} " \
                        f"{entry.matched_rule} {entry.proxy_used}".lower()
             if self._text not in haystack:
                 return False
@@ -124,7 +124,7 @@ class LogsPage(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
         self.table.setSortingEnabled(True)
         # Ordem inicial: mais recente primeiro (igual ao comportamento de sempre, antes de
         # ordenação existir) — clicar em qualquer cabeçalho de coluna troca pra ela, e clicar de
