@@ -374,31 +374,42 @@ class ProxyEngine:
                                      default_action=self.config.settings.default_action)
         profile: Optional[ProxyProfile] = None
         proxy_label = ""
+        proxy_ip_literal: Optional[str] = None
         if match.action_kind == "proxy":
             profile = self._resolve_proxy_profile(match)
             proxy_label = profile.name if profile else "(nenhum proxy configurado)"
+            if profile:
+                proxy_ip_literal = _literal_ip(profile.host)
 
         entry = self.log_store.add(LogEntry(
             pid=proc.pid, process_name=proc.name, process_path=proc.path, protocol=protocol,
             dst_host=host_for_rules, dst_ip=ip_literal or "", dst_port=target_port,
             matched_rule=self._rule_label(match), action=match.action_kind, proxy_used=proxy_label,
+            proxy_ip=proxy_ip_literal or "",
         ))
         if ip_literal is None:
             # target_host é um domínio (não um IP literal): resolve em segundo plano só pra
             # exibir no log, sem atrasar a conexão nem o roteamento — vale tanto pra "direct"
-            # quanto pra "proxy" (nesse último caso é o IP que o resolvedor local vê; o proxy
-            # upstream pode resolver o mesmo domínio pra um IP diferente, ex.: CDN geolocalizado).
-            asyncio.ensure_future(self._resolve_dst_ip(entry.id, target_host))
+            # quanto pra "proxy" (nesse último caso é o IP que o resolvedor local vê pro DESTINO;
+            # não é o IP que o site remoto enxerga quando a conexão vai via proxy — pra isso ver
+            # proxy_ip, abaixo).
+            asyncio.ensure_future(self._resolve_ip_field(entry.id, target_host, "dst_ip"))
+        if profile is not None and proxy_ip_literal is None:
+            # Mesma lógica pro endereço do proxy em si: se profile.host é um domínio, resolve em
+            # segundo plano. Esse é o IP mais próximo do que um site tipo "qual é o meu IP"
+            # mostraria pra essa conexão — assumindo que o proxy não fica atrás de um pool de IPs
+            # de saída diferentes do endereço pro qual discamos.
+            asyncio.ensure_future(self._resolve_ip_field(entry.id, profile.host, "proxy_ip"))
         return match, profile, entry
 
-    async def _resolve_dst_ip(self, entry_id: str, host: str) -> None:
+    async def _resolve_ip_field(self, entry_id: str, host: str, field_name: str) -> None:
         try:
             loop = asyncio.get_running_loop()
             infos = await asyncio.wait_for(loop.getaddrinfo(host, None), timeout=2.0)
         except Exception:
             return
         if infos:
-            self.log_store.update(entry_id, dst_ip=infos[0][4][0])
+            self.log_store.update(entry_id, **{field_name: infos[0][4][0]})
 
     async def _connect_upstream(self, match: MatchResult, profile: Optional[ProxyProfile],
                                  target_host: str, target_port: int):

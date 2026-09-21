@@ -30,6 +30,7 @@ class LogEntry:
     matched_rule: str = ""
     action: str = ""  # "direct" | "block" | "proxy"
     proxy_used: str = ""
+    proxy_ip: str = ""
     bytes_sent: int = 0
     bytes_recv: int = 0
     duration_ms: int = 0
@@ -63,6 +64,7 @@ class LogStore:
                     matched_rule TEXT,
                     action TEXT,
                     proxy_used TEXT,
+                    proxy_ip TEXT,
                     bytes_sent INTEGER,
                     bytes_recv INTEGER,
                     duration_ms INTEGER,
@@ -71,11 +73,12 @@ class LogStore:
                 )
             """)
             con.execute("CREATE INDEX IF NOT EXISTS idx_connections_ts ON connections(timestamp)")
-            # Migração pra bancos criados antes do campo dst_ip existir: CREATE TABLE IF NOT
+            # Migração pra bancos criados antes de dst_ip/proxy_ip existirem: CREATE TABLE IF NOT
             # EXISTS não adiciona coluna em tabela já existente.
             existing_cols = {row[1] for row in con.execute("PRAGMA table_info(connections)")}
-            if "dst_ip" not in existing_cols:
-                con.execute("ALTER TABLE connections ADD COLUMN dst_ip TEXT DEFAULT ''")
+            for col in ("dst_ip", "proxy_ip"):
+                if col not in existing_cols:
+                    con.execute(f"ALTER TABLE connections ADD COLUMN {col} TEXT DEFAULT ''")
         self._prune_old()
 
     def _connect(self) -> sqlite3.Connection:
@@ -138,12 +141,12 @@ class LogStore:
                 con.execute(
                     """INSERT OR REPLACE INTO connections
                     (id, timestamp, pid, process_name, process_path, protocol, dst_host, dst_ip,
-                     dst_port, matched_rule, action, proxy_used, bytes_sent, bytes_recv,
+                     dst_port, matched_rule, action, proxy_used, proxy_ip, bytes_sent, bytes_recv,
                      duration_ms, status, error)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (entry.id, entry.timestamp, entry.pid, entry.process_name, entry.process_path,
                      entry.protocol, entry.dst_host, entry.dst_ip, entry.dst_port, entry.matched_rule,
-                     entry.action, entry.proxy_used, entry.bytes_sent, entry.bytes_recv,
+                     entry.action, entry.proxy_used, entry.proxy_ip, entry.bytes_sent, entry.bytes_recv,
                      entry.duration_ms, entry.status, entry.error),
                 )
         except sqlite3.Error:

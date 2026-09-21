@@ -11,7 +11,7 @@ from ..core.logstore import LogEntry
 from .theme import PALETTE
 
 COLUMNS = ["Hora", "Processo", "PID", "Destino", "IP", "Protocolo", "Regra", "Ação", "Proxy",
-           "Enviado", "Recebido", "Duração", "Status"]
+           "IP do Proxy", "Enviado", "Recebido", "Duração", "Status"]
 
 # Papel próprio pra ordenação: DisplayRole é sempre uma string formatada ("1.2 KB", "230 ms",
 # "01:04:59"), o que ordenaria por ordem alfabética em vez de numérica/cronológica. Colunas
@@ -70,17 +70,17 @@ class LogTableModel(QAbstractTableModel):
             return self._display_value(entry, col)
         if role == SORT_ROLE:
             return self._sort_value(entry, col)
-        if role == Qt.ItemDataRole.ForegroundRole and col in (7, 12):
+        if role == Qt.ItemDataRole.ForegroundRole and col in (7, 13):
             color_map = _ACTION_COLOR if col == 7 else _STATUS_COLOR
             key = entry.action if col == 7 else entry.status
             color = color_map.get(key)
             if color:
                 return QColor(color)
-        if role == Qt.ItemDataRole.TextAlignmentRole and col in (2, 9, 10, 11):
+        if role == Qt.ItemDataRole.TextAlignmentRole and col in (2, 10, 11, 12):
             return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         if role == Qt.ItemDataRole.ToolTipRole and col == 6:
             return entry.matched_rule
-        if role == Qt.ItemDataRole.ToolTipRole and col == 12 and entry.error:
+        if role == Qt.ItemDataRole.ToolTipRole and col == 13 and entry.error:
             return entry.error
         return None
 
@@ -105,12 +105,16 @@ class LogTableModel(QAbstractTableModel):
         if col == 8:
             return entry.proxy_used or "-"
         if col == 9:
-            return format_bytes(entry.bytes_sent)
+            if entry.action != "proxy":
+                return "-"
+            return entry.proxy_ip or ("resolvendo…" if entry.status == "ativa" else "-")
         if col == 10:
-            return format_bytes(entry.bytes_recv)
+            return format_bytes(entry.bytes_sent)
         if col == 11:
-            return f"{entry.duration_ms} ms" if entry.status != "ativa" else "…"
+            return format_bytes(entry.bytes_recv)
         if col == 12:
+            return f"{entry.duration_ms} ms" if entry.status != "ativa" else "…"
+        if col == 13:
             return STATUS_LABELS.get(entry.status, entry.status)
         return ""
 
@@ -120,11 +124,11 @@ class LogTableModel(QAbstractTableModel):
             return entry.timestamp
         if col == 2:
             return entry.pid
-        if col == 9:
-            return entry.bytes_sent
         if col == 10:
-            return entry.bytes_recv
+            return entry.bytes_sent
         if col == 11:
+            return entry.bytes_recv
+        if col == 12:
             return entry.duration_ms
         return LogTableModel._display_value(entry, col)
 

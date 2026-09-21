@@ -56,7 +56,7 @@ class LogFilterProxy(QSortFilterProxyModel):
             return False
         if self._text:
             haystack = f"{entry.process_name} {entry.process_path} {entry.dst_host} {entry.dst_ip} " \
-                       f"{entry.matched_rule} {entry.proxy_used}".lower()
+                       f"{entry.matched_rule} {entry.proxy_used} {entry.proxy_ip}".lower()
             if self._text not in haystack:
                 return False
         return True
