@@ -9,7 +9,7 @@ import threading
 import time
 from typing import Callable, Optional, Protocol
 
-from . import httpproxy, process_lookup, socks5
+from . import httpproxy, ip_check, process_lookup, socks5
 from .config import AppConfig, ProxyProfile
 from .logstore import LogEntry, LogStore
 from .rules import MatchResult, RuleSet
@@ -17,6 +17,11 @@ from .system_integration import build_pac_script, start_pac_server
 from .transparent import sniff
 
 StatusCallback = Callable[[bool, str], None]
+
+# Quanto tempo um IP de saída verificado (via ip-api.com) fica valendo em cache antes de
+# verificar de novo — evita bater no ip-api.com a cada conexão (o free tier tem limite de
+# requisições por minuto) já que o IP de saída de um proxy raramente muda de um minuto pro outro.
+EGRESS_IP_CACHE_TTL = 600.0
 
 
 class TransparentBackend(Protocol):
@@ -65,6 +70,16 @@ class ProxyEngine:
         self._ready = threading.Event()
         self._active_writers: set[asyncio.StreamWriter] = set()
         self.transparent_backend: Optional[TransparentBackend] = None
+        # Cache do IP de saída verificado por perfil de proxy: chave inclui host/porta/tipo (não
+        # só o id) pra invalidar sozinho se o usuário editar o perfil, em vez de esperar o TTL
+        # expirar mostrando um IP que já não é mais o de verdade.
+        self._egress_ip_cache: dict[str, tuple[float, str]] = {}
+        self._egress_ip_checking: set[str] = set()
+        # Tarefas de segundo plano por conexão (resolução de dst_ip, verificação de proxy_ip):
+        # rastreadas pra poderem ser canceladas em _shutdown() — sem isso, uma verificação de
+        # egress IP em andamento (uma chamada de rede de verdade ao ip-api.com) sobreviveria ao
+        # próprio motor já "parado", vazando o socket até o GC derrubar a tarefa sozinho.
+        self._background_tasks: set[asyncio.Task] = set()
 
         self.active_connections = 0
         self.total_bytes_sent = 0
@@ -176,6 +191,15 @@ class ProxyEngine:
             except Exception:
                 pass
         self._active_writers.clear()
+
+        # Mesma lógica pras tarefas de segundo plano (resolução de dst_ip / verificação de
+        # proxy_ip via ip-api.com): cancela e espera elas de fato pararem, em vez de deixá-las
+        # penduradas segurando um socket depois do motor já ter "parado".
+        pending_tasks = list(self._background_tasks)
+        for task in pending_tasks:
+            task.cancel()
+        if pending_tasks:
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
 
         for server in servers:
             try:
@@ -374,42 +398,77 @@ class ProxyEngine:
                                      default_action=self.config.settings.default_action)
         profile: Optional[ProxyProfile] = None
         proxy_label = ""
-        proxy_ip_literal: Optional[str] = None
+        proxy_ip_value = ""
+        needs_egress_check = False
         if match.action_kind == "proxy":
             profile = self._resolve_proxy_profile(match)
             proxy_label = profile.name if profile else "(nenhum proxy configurado)"
             if profile:
-                proxy_ip_literal = _literal_ip(profile.host)
+                cached = self._egress_ip_cache.get(self._egress_cache_key(profile))
+                if cached:
+                    proxy_ip_value = cached[1]
+                    needs_egress_check = (time.time() - cached[0]) >= EGRESS_IP_CACHE_TTL
+                else:
+                    needs_egress_check = True
 
         entry = self.log_store.add(LogEntry(
             pid=proc.pid, process_name=proc.name, process_path=proc.path, protocol=protocol,
             dst_host=host_for_rules, dst_ip=ip_literal or "", dst_port=target_port,
             matched_rule=self._rule_label(match), action=match.action_kind, proxy_used=proxy_label,
-            proxy_ip=proxy_ip_literal or "",
+            proxy_ip=proxy_ip_value,
         ))
         if ip_literal is None:
             # target_host é um domínio (não um IP literal): resolve em segundo plano só pra
-            # exibir no log, sem atrasar a conexão nem o roteamento — vale tanto pra "direct"
-            # quanto pra "proxy" (nesse último caso é o IP que o resolvedor local vê pro DESTINO;
-            # não é o IP que o site remoto enxerga quando a conexão vai via proxy — pra isso ver
-            # proxy_ip, abaixo).
-            asyncio.ensure_future(self._resolve_ip_field(entry.id, target_host, "dst_ip"))
-        if profile is not None and proxy_ip_literal is None:
-            # Mesma lógica pro endereço do proxy em si: se profile.host é um domínio, resolve em
-            # segundo plano. Esse é o IP mais próximo do que um site tipo "qual é o meu IP"
-            # mostraria pra essa conexão — assumindo que o proxy não fica atrás de um pool de IPs
-            # de saída diferentes do endereço pro qual discamos.
-            asyncio.ensure_future(self._resolve_ip_field(entry.id, profile.host, "proxy_ip"))
+            # exibir no log, sem atrasar a conexão nem o roteamento.
+            self._spawn_background(self._resolve_dst_ip(entry.id, target_host))
+        if profile is not None and needs_egress_check:
+            # Verifica (ou reverifica, se o cache expirou) o IP de saída real do proxy, consultando
+            # o ip-api.com através do próprio túnel — é o único jeito confiável de saber o IP que um
+            # site remoto de fato vê; o endereço de conexão do perfil pode divergir dele (proxies com
+            # pool de IPs). Em segundo plano: não atrasa a conexão que disparou a verificação.
+            self._spawn_background(
+                self._refresh_egress_ip(profile, entry.id, had_fallback=bool(proxy_ip_value)))
         return match, profile, entry
 
-    async def _resolve_ip_field(self, entry_id: str, host: str, field_name: str) -> None:
+    def _spawn_background(self, coro) -> None:
+        task = asyncio.ensure_future(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    @staticmethod
+    def _egress_cache_key(profile: ProxyProfile) -> str:
+        # Inclui host/porta/tipo (não só o id) pra invalidar sozinho se o usuário editar o
+        # perfil, em vez de continuar mostrando um IP que já não é mais o de verdade até o TTL
+        # expirar.
+        return f"{profile.id}:{profile.type}:{profile.host}:{profile.port}"
+
+    async def _resolve_dst_ip(self, entry_id: str, host: str) -> None:
         try:
             loop = asyncio.get_running_loop()
             infos = await asyncio.wait_for(loop.getaddrinfo(host, None), timeout=2.0)
         except Exception:
             return
         if infos:
-            self.log_store.update(entry_id, **{field_name: infos[0][4][0]})
+            self.log_store.update(entry_id, dst_ip=infos[0][4][0])
+
+    async def _refresh_egress_ip(self, profile: ProxyProfile, entry_id: str, had_fallback: bool) -> None:
+        key = self._egress_cache_key(profile)
+        if key in self._egress_ip_checking:
+            return
+        self._egress_ip_checking.add(key)
+        try:
+            ip = await ip_check.fetch_egress_ip(profile)
+        finally:
+            self._egress_ip_checking.discard(key)
+        if ip:
+            self._egress_ip_cache[key] = (time.time(), ip)
+            self.log_store.update(entry_id, proxy_ip=ip)
+        elif not had_fallback:
+            # "?" sinaliza "verificação falhou" pra GUI (proxy inatingível a partir do ip-api.com,
+            # timeout etc.) em vez de deixar a célula presa em "verificando…" pra sempre. Se já
+            # havia um valor em cache (mesmo expirado) pra mostrar, mantém ele em vez de apagar
+            # uma informação boa por causa de uma reverificação que falhou.
+            self.log_store.update(entry_id, proxy_ip="?")
 
     async def _connect_upstream(self, match: MatchResult, profile: Optional[ProxyProfile],
                                  target_host: str, target_port: int):

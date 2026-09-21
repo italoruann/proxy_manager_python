@@ -107,7 +107,9 @@ class LogTableModel(QAbstractTableModel):
         if col == 9:
             if entry.action != "proxy":
                 return "-"
-            return entry.proxy_ip or ("resolvendo…" if entry.status == "ativa" else "-")
+            if entry.proxy_ip == "?":
+                return "indisponível"
+            return entry.proxy_ip or "verificando…"
         if col == 10:
             return format_bytes(entry.bytes_sent)
         if col == 11:
