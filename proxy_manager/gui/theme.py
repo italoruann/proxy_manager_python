@@ -123,6 +123,28 @@ QLabel#PageSubtitle {{
     font-size: 12px;
 }}
 
+/* ---------- Atalho de proxy ativo (Dashboard) ---------- */
+QFrame#QuickProxyBar {{
+    background-color: {p['surface_alt']};
+    border: 1px solid {p['border']};
+    border-radius: 10px;
+}}
+QLabel#QuickProxyLabel {{
+    color: {p['text_faint']};
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    padding-left: 1px;
+}}
+QComboBox#QuickProxyCombo {{
+    min-width: 172px;
+    background-color: {p['surface']};
+    border: 1px solid {p['border']};
+    padding: 4px 8px;
+}}
+QComboBox#QuickProxyCombo:focus {{ border: 1px solid {p['accent']}; }}
+
 /* ---------- Buttons ---------- */
 QPushButton {{
     background-color: {p['surface_alt']};
@@ -157,6 +179,24 @@ QPushButton#DangerButton {{
     color: {p['danger']};
 }}
 QPushButton#DangerButton:hover {{ background-color: {p['danger_soft']}; }}
+
+QPushButton#IconButton {{
+    background-color: {p['surface']};
+    border: 1px solid {p['border']};
+    border-radius: 8px;
+    padding: 6px 4px;
+    font-weight: 600;
+}}
+QPushButton#IconButton:hover {{
+    background-color: {p['surface_hover']};
+    border-color: {p['accent']};
+    color: {p['accent_hover']};
+}}
+QPushButton#IconButton::menu-indicator {{
+    subcontrol-position: right center;
+    subcontrol-origin: padding;
+    right: 4px;
+}}
 
 QPushButton#EngineToggleOn {{
     background-color: {p['danger']};

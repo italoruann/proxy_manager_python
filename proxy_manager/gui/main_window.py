@@ -50,9 +50,14 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.stack, 1)
 
         self.nav_buttons[0].setChecked(True)
+        self.dashboard_page.manage_proxies_requested.connect(lambda: self._go_to_nav(1))
 
         self._build_tray_icon()
         ctx.status_changed.connect(self._on_status_changed_tray)
+
+    def _go_to_nav(self, index: int) -> None:
+        self.nav_buttons[index].setChecked(True)
+        self.stack.setCurrentIndex(index)
 
     def _build_sidebar(self) -> QFrame:
         frame = QFrame()

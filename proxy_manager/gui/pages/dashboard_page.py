@@ -2,7 +2,7 @@
 conexões mais recentes."""
 from __future__ import annotations
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QFrame, QHBoxLayout, QHeaderView, QLabel, QPushButton, QTableView,
     QVBoxLayout, QWidget,
@@ -11,10 +11,13 @@ from PySide6.QtWidgets import (
 from ..app_context import AppContext
 from ..log_model import format_bytes
 from ..widgets.cards import StatCard, StatusDot
+from ..widgets.quick_proxy import QuickProxyBar
 from ..widgets.sparkline import Sparkline
 
 
 class DashboardPage(QWidget):
+    manage_proxies_requested = Signal()
+
     def __init__(self, ctx: AppContext, parent: QWidget | None = None):
         super().__init__(parent)
         self.ctx = ctx
@@ -34,6 +37,13 @@ class DashboardPage(QWidget):
         title_box.addWidget(subtitle)
         header.addLayout(title_box)
         header.addStretch(1)
+
+        # Atalho pedido explicitamente: trocar o proxy ativo e editar suas credenciais sem sair
+        # do Dashboard, bem colado ao controle que liga/desliga o motor.
+        self.quick_proxy_bar = QuickProxyBar(ctx)
+        self.quick_proxy_bar.manage_requested.connect(self.manage_proxies_requested.emit)
+        header.addWidget(self.quick_proxy_bar)
+        header.addSpacing(10)
 
         self.status_dot = StatusDot("Motor parado", "text_faint")
         self.toggle_btn = QPushButton("Iniciar motor")
