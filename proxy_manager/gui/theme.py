@@ -144,6 +144,23 @@ QComboBox#QuickProxyCombo {{
     padding: 4px 8px;
 }}
 QComboBox#QuickProxyCombo:focus {{ border: 1px solid {p['accent']}; }}
+QFrame#QuickProxyDivider {{
+    background-color: {p['border']};
+    margin: 4px 2px;
+}}
+QLabel#QuickProxyIpPrevious {{
+    color: {p['text_faint']};
+    font-size: 12px;
+}}
+QLabel#QuickProxyIpArrow {{
+    color: {p['text_faint']};
+    font-size: 12px;
+}}
+QLabel#QuickProxyIpCurrent {{
+    color: {p['text']};
+    font-weight: 600;
+    font-size: 12px;
+}}
 
 /* ---------- Buttons ---------- */
 QPushButton {{

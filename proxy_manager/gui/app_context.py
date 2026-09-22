@@ -24,6 +24,7 @@ class AppContext(QObject):
     log_updated = Signal(list)
     status_changed = Signal(bool, str)
     config_changed = Signal()
+    egress_ip_changed = Signal(str, str, str)  # profile_id, ip anterior ("" se é o primeiro), ip atual
 
     def __init__(self) -> None:
         super().__init__()
@@ -31,7 +32,13 @@ class AppContext(QObject):
         self.log_store = LogStore(retention_days=self.config.settings.log_retention_days)
         self.engine = ProxyEngine(self.config, self.log_store)
         self.engine.on_status_change = self._on_status
+        self.engine.on_egress_ip_change = self._on_egress_ip_change
         self.log_store.subscribe(self._on_log_event)
+
+        # Último IP de saída conhecido por perfil (profile.id -> (ip_anterior, ip_atual)), pra
+        # widgets criados/atualizados depois do fato (ex.: ao trocar a seleção no atalho do
+        # Dashboard) poderem consultar o estado atual sem esperar o próximo sinal.
+        self.egress_ip_state: dict[str, tuple[str, str]] = {}
 
         self._pending_lock = threading.Lock()
         self._pending_added: list[LogEntry] = []
@@ -75,6 +82,13 @@ class AppContext(QObject):
             self.log_added.emit(added)
         if updated:
             self.log_updated.emit(updated)
+
+    def _on_egress_ip_change(self, profile_id: str, previous_ip: str, current_ip: str) -> None:
+        # Chamado na thread do motor (mesma ressalva de _on_log_event): Signal.emit atravessa
+        # pra a thread da GUI sozinho (conexão automática do Qt), então basta guardar o estado e
+        # emitir — nada de tocar em widgets aqui.
+        self.egress_ip_state[profile_id] = (previous_ip, current_ip)
+        self.egress_ip_changed.emit(profile_id, previous_ip, current_ip)
 
     def _on_status(self, running: bool, message: str) -> None:
         self.status_changed.emit(running, message)

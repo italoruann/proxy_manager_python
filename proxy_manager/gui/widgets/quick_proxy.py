@@ -157,6 +157,39 @@ class QuickProxyBar(QFrame):
         label_box.addWidget(self.combo)
         layout.addLayout(label_box)
 
+        divider = QFrame()
+        divider.setObjectName("QuickProxyDivider")
+        divider.setFixedWidth(1)
+        layout.addWidget(divider)
+
+        # Um único indicador do IP de saída real do perfil selecionado, em vez de repeti-lo em
+        # cada linha da tabela de conexões — se ele mudar (ex.: editou host/porta ou o proxy tem
+        # pool rotativo de IPs), mostra o valor anterior riscado ao lado do novo, em vez de só
+        # substituir silenciosamente.
+        ip_box = QVBoxLayout()
+        ip_box.setSpacing(2)
+        ip_caption = QLabel("IP DE SAÍDA")
+        ip_caption.setObjectName("QuickProxyLabel")
+        ip_box.addWidget(ip_caption)
+
+        ip_value_row = QHBoxLayout()
+        ip_value_row.setSpacing(6)
+        self.ip_previous_label = QLabel("")
+        self.ip_previous_label.setObjectName("QuickProxyIpPrevious")
+        self.ip_previous_label.setTextFormat(Qt.TextFormat.RichText)
+        self.ip_previous_label.setToolTip("IP de saída anterior, antes da última mudança detectada.")
+        self.ip_previous_label.setVisible(False)
+        self.ip_arrow_label = QLabel("→")
+        self.ip_arrow_label.setObjectName("QuickProxyIpArrow")
+        self.ip_arrow_label.setVisible(False)
+        self.ip_current_label = QLabel("—")
+        self.ip_current_label.setObjectName("QuickProxyIpCurrent")
+        ip_value_row.addWidget(self.ip_previous_label)
+        ip_value_row.addWidget(self.ip_arrow_label)
+        ip_value_row.addWidget(self.ip_current_label)
+        ip_box.addLayout(ip_value_row)
+        layout.addLayout(ip_box)
+
         self.actions_btn = QPushButton("⚙")
         self.actions_btn.setObjectName("IconButton")
         self.actions_btn.setFixedWidth(36)
@@ -175,6 +208,8 @@ class QuickProxyBar(QFrame):
         layout.addWidget(self.actions_btn)
 
         ctx.config_changed.connect(self._reload)
+        ctx.egress_ip_changed.connect(self._on_egress_ip_changed)
+        ctx.status_changed.connect(lambda *_: self._update_ip_display())
         self._reload()
 
     def _reload(self) -> None:
@@ -193,6 +228,7 @@ class QuickProxyBar(QFrame):
             target_id = default.id if default else self.ctx.config.proxies[0].id
             self.combo.setCurrentIndex(max(self.combo.findData(target_id), 0))
         self.combo.blockSignals(False)
+        self._update_ip_display()
 
     def _current_profile(self) -> ProxyProfile | None:
         profile_id = self.combo.currentData()
@@ -202,11 +238,43 @@ class QuickProxyBar(QFrame):
 
     def _on_combo_changed(self, _index: int) -> None:
         profile = self._current_profile()
-        if profile is None or profile.is_default:
+        if profile is not None and not profile.is_default:
+            for other in self.ctx.config.proxies:
+                other.is_default = (other.id == profile.id)
+            self.ctx.apply_config_changes()
+        self._update_ip_display()
+
+    def _on_egress_ip_changed(self, profile_id: str, _previous_ip: str, _current_ip: str) -> None:
+        profile = self._current_profile()
+        if profile is not None and profile_id == profile.id:
+            self._update_ip_display()
+
+    def _update_ip_display(self) -> None:
+        profile = self._current_profile()
+        if profile is None:
+            self.ip_current_label.setText("—")
+            self.ip_previous_label.setVisible(False)
+            self.ip_arrow_label.setVisible(False)
             return
-        for other in self.ctx.config.proxies:
-            other.is_default = (other.id == profile.id)
-        self.ctx.apply_config_changes()
+
+        previous_ip, current_ip = self.ctx.egress_ip_state.get(profile.id, ("", ""))
+        if not current_ip:
+            self.ip_current_label.setText("verificando…" if self.ctx.engine.is_running() else "sem dados ainda")
+            self.ip_current_label.setToolTip("")
+            self.ip_previous_label.setVisible(False)
+            self.ip_arrow_label.setVisible(False)
+            return
+
+        self.ip_current_label.setText(current_ip)
+        show_previous = bool(previous_ip and previous_ip != current_ip)
+        self.ip_previous_label.setVisible(show_previous)
+        self.ip_arrow_label.setVisible(show_previous)
+        if show_previous:
+            self.ip_previous_label.setText(f"<s>{previous_ip}</s>")
+            self.ip_current_label.setToolTip(
+                f"O IP de saída detectado mudou de {previous_ip} para {current_ip}.")
+        else:
+            self.ip_current_label.setToolTip("IP de saída real verificado através do proxy (via ip-api.com).")
 
     def _on_edit(self) -> None:
         profile = self._current_profile()

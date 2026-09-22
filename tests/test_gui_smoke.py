@@ -234,14 +234,14 @@ def test_logs_page_columns_are_sortable(window):
         return [page.proxy_model.data(page.proxy_model.index(row, col))
                 for row in range(page.proxy_model.rowCount())]
 
-    page.table.sortByColumn(12, Qt.SortOrder.AscendingOrder)  # Duração
-    assert column_values(12) == ["50 ms", "200 ms", "1453 ms"]
+    page.table.sortByColumn(11, Qt.SortOrder.AscendingOrder)  # Duração
+    assert column_values(11) == ["50 ms", "200 ms", "1453 ms"]
 
-    page.table.sortByColumn(12, Qt.SortOrder.DescendingOrder)
-    assert column_values(12) == ["1453 ms", "200 ms", "50 ms"]
+    page.table.sortByColumn(11, Qt.SortOrder.DescendingOrder)
+    assert column_values(11) == ["1453 ms", "200 ms", "50 ms"]
 
-    page.table.sortByColumn(10, Qt.SortOrder.AscendingOrder)  # Enviado (bytes)
-    assert column_values(10) == ["800 B", "1.2 KB", "4.9 KB"]
+    page.table.sortByColumn(9, Qt.SortOrder.AscendingOrder)  # Enviado (bytes)
+    assert column_values(9) == ["800 B", "1.2 KB", "4.9 KB"]
 
 
 def test_settings_page_toggles(window):

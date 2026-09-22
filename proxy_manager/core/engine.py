@@ -17,6 +17,8 @@ from .system_integration import build_pac_script, start_pac_server
 from .transparent import sniff
 
 StatusCallback = Callable[[bool, str], None]
+# profile_id, ip anterior ("" se essa é a primeira verificação), ip atual
+EgressIpCallback = Callable[[str, str, str], None]
 
 # Quanto tempo um IP de saída verificado (via ip-api.com) fica valendo em cache antes de
 # verificar de novo — evita bater no ip-api.com a cada conexão (o free tier tem limite de
@@ -58,6 +60,7 @@ class ProxyEngine:
         self.log_store = log_store
         self.rule_set = RuleSet.parse(config.rules_text)
         self.on_status_change: Optional[StatusCallback] = None
+        self.on_egress_ip_change: Optional[EgressIpCallback] = None
 
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
@@ -75,6 +78,11 @@ class ProxyEngine:
         # expirar mostrando um IP que já não é mais o de verdade.
         self._egress_ip_cache: dict[str, tuple[float, str]] = {}
         self._egress_ip_checking: set[str] = set()
+        # Último IP de saída conhecido POR PERFIL (chave = profile.id, sem host/porta/tipo) —
+        # ao contrário de _egress_ip_cache, essa chave não muda se o usuário editar host/porta,
+        # então uma reverificação forçada por essa edição ainda é comparada contra o IP anterior
+        # de verdade, permitindo avisar a GUI "mudou de X para Y" em vez de só mostrar Y.
+        self._egress_ip_by_profile: dict[str, str] = {}
         # Tarefas de segundo plano por conexão (resolução de dst_ip, verificação de proxy_ip):
         # rastreadas pra poderem ser canceladas em _shutdown() — sem isso, uma verificação de
         # egress IP em andamento (uma chamada de rede de verdade ao ip-api.com) sobreviveria ao
@@ -463,12 +471,20 @@ class ProxyEngine:
         if ip:
             self._egress_ip_cache[key] = (time.time(), ip)
             self.log_store.update(entry_id, proxy_ip=ip)
+            previous_ip = self._egress_ip_by_profile.get(profile.id, "")
+            if ip != previous_ip:
+                self._egress_ip_by_profile[profile.id] = ip
+                self._emit_egress_ip_change(profile.id, previous_ip, ip)
         elif not had_fallback:
             # "?" sinaliza "verificação falhou" pra GUI (proxy inatingível a partir do ip-api.com,
             # timeout etc.) em vez de deixar a célula presa em "verificando…" pra sempre. Se já
             # havia um valor em cache (mesmo expirado) pra mostrar, mantém ele em vez de apagar
             # uma informação boa por causa de uma reverificação que falhou.
             self.log_store.update(entry_id, proxy_ip="?")
+
+    def _emit_egress_ip_change(self, profile_id: str, previous_ip: str, current_ip: str) -> None:
+        if self.on_egress_ip_change:
+            self.on_egress_ip_change(profile_id, previous_ip, current_ip)
 
     async def _connect_upstream(self, match: MatchResult, profile: Optional[ProxyProfile],
                                  target_host: str, target_port: int):
