@@ -443,6 +443,13 @@ class ProxyEngine:
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
 
+    def seed_egress_ip_state(self, current_ip_by_profile: dict[str, str]) -> None:
+        """Restaura o último IP de saída conhecido por perfil (de uma sessão anterior), chamado
+        logo após a criação do motor. Sem isso, a primeira verificação depois de reabrir o app
+        trataria tudo como 'primeira detecção' (sem IP anterior pra comparar) e o histórico
+        antes/depois persistido nunca receberia uma nova transição de verdade."""
+        self._egress_ip_by_profile.update(current_ip_by_profile)
+
     @staticmethod
     def _egress_cache_key(profile: ProxyProfile) -> str:
         # Inclui host/porta/tipo (não só o id) pra invalidar sozinho se o usuário editar o

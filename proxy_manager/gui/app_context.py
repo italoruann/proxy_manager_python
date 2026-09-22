@@ -8,6 +8,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 from ..core import system_integration
 from ..core.config import AppConfig, load_config, save_config
+from ..core.egress_ip_store import load_egress_ip_state, save_egress_ip_state
 from ..core.engine import ProxyEngine
 from ..core.logstore import LogEntry, LogStore
 from .log_model import LogTableModel
@@ -35,10 +36,15 @@ class AppContext(QObject):
         self.engine.on_egress_ip_change = self._on_egress_ip_change
         self.log_store.subscribe(self._on_log_event)
 
-        # Último IP de saída conhecido por perfil (profile.id -> (ip_anterior, ip_atual)), pra
-        # widgets criados/atualizados depois do fato (ex.: ao trocar a seleção no atalho do
-        # Dashboard) poderem consultar o estado atual sem esperar o próximo sinal.
-        self.egress_ip_state: dict[str, tuple[str, str]] = {}
+        # Último IP de saída conhecido por perfil (profile.id -> (ip_anterior, ip_atual)),
+        # carregado do disco pra sobreviver a fechar/reabrir o app — widgets criados depois do
+        # fato (ex.: ao trocar a seleção no atalho do Dashboard) consultam esse estado direto,
+        # sem esperar o próximo sinal. Alimenta o motor de volta (só o IP "atual" de cada perfil)
+        # pra ele continuar comparando contra o valor real anterior, em vez de tratar a primeira
+        # verificação pós-reabertura como se não houvesse histórico nenhum.
+        self.egress_ip_state: dict[str, tuple[str, str]] = load_egress_ip_state()
+        self.engine.seed_egress_ip_state(
+            {pid: current for pid, (_previous, current) in self.egress_ip_state.items()})
 
         self._pending_lock = threading.Lock()
         self._pending_added: list[LogEntry] = []
@@ -86,8 +92,11 @@ class AppContext(QObject):
     def _on_egress_ip_change(self, profile_id: str, previous_ip: str, current_ip: str) -> None:
         # Chamado na thread do motor (mesma ressalva de _on_log_event): Signal.emit atravessa
         # pra a thread da GUI sozinho (conexão automática do Qt), então basta guardar o estado e
-        # emitir — nada de tocar em widgets aqui.
+        # emitir — nada de tocar em widgets aqui. Persiste a cada mudança (não só ao fechar o
+        # app): mudanças de IP são raras (minutos/horas entre elas, não por conexão), então o
+        # custo é insignificante, e assim o histórico sobrevive até a um encerramento abrupto.
         self.egress_ip_state[profile_id] = (previous_ip, current_ip)
+        save_egress_ip_state(self.egress_ip_state)
         self.egress_ip_changed.emit(profile_id, previous_ip, current_ip)
 
     def _on_status(self, running: bool, message: str) -> None:
@@ -127,8 +136,19 @@ class AppContext(QObject):
         """Chamar depois de qualquer edição em self.config (proxies/regras/settings)."""
         self.engine.update_config(self.config)
         self.log_store.retention_days = self.config.settings.log_retention_days
+        self._prune_egress_ip_state()
         self.save()
         self.config_changed.emit()
+
+    def _prune_egress_ip_state(self) -> None:
+        """Descarta o histórico de IP guardado para perfis que não existem mais — senão um
+        perfil apagado deixaria uma entrada órfã no arquivo pra sempre."""
+        known_ids = {p.id for p in self.config.proxies}
+        orphaned = set(self.egress_ip_state) - known_ids
+        if orphaned:
+            for profile_id in orphaned:
+                del self.egress_ip_state[profile_id]
+            save_egress_ip_state(self.egress_ip_state)
 
     def apply_settings_live(self) -> tuple[bool, str]:
         """Como apply_config_changes(), mas pra mudanças de porta/modo transparente com o motor
