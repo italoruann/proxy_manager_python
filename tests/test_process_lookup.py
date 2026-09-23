@@ -62,3 +62,26 @@ def test_failed_lookup_is_not_cached(monkeypatch):
     info = process_lookup._resolve_process(pid=999)
     assert info.name == "pid 999"
     assert 999 not in process_lookup._process_cache
+
+
+def _conn(lport, rip, rport, pid):
+    return SimpleNamespace(laddr=SimpleNamespace(ip="192.168.0.5", port=lport),
+                           raddr=SimpleNamespace(ip=rip, port=rport), pid=pid)
+
+
+def test_transparent_lookup_matches_client_socket_by_original_destination(monkeypatch):
+    # No modo transparente o socket do app continua apontando pro destino original (o NAT é
+    # invisível pra ele), não pra nossa porta transparente.
+    conns = [
+        _conn(58095, "192.168.0.5", 40000, pid=process_lookup.os.getpid()),  # nosso lado aceito
+        _conn(40000, "142.250.1.1", 443, pid=777),  # socket do Chrome
+    ]
+    monkeypatch.setattr(process_lookup.psutil, "net_connections", lambda kind: conns)
+    monkeypatch.setattr(process_lookup, "_resolve_process",
+                        lambda pid: process_lookup.ProcessInfo(pid=pid, name="chrome"))
+
+    info = process_lookup.lookup_by_local_peer("192.168.0.5", 40000, 58095,
+                                               original_dst=("142.250.1.1", 443))
+    assert info.pid == 777
+
+    assert process_lookup.lookup_by_local_peer("192.168.0.5", 40000, 58095) is process_lookup.UNKNOWN

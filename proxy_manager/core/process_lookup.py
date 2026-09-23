@@ -2,8 +2,10 @@
 (via psutil) com o endereço/porta observados pelo nosso listener."""
 from __future__ import annotations
 
+import os
 from collections import OrderedDict
 from dataclasses import dataclass
+from typing import Optional
 
 import psutil
 
@@ -25,20 +27,38 @@ class ProcessInfo:
 UNKNOWN = ProcessInfo()
 
 
-def lookup_by_local_peer(peer_ip: str, peer_port: int, listen_port: int) -> ProcessInfo:
+def lookup_by_local_peer(peer_ip: str, peer_port: int, listen_port: int,
+                         original_dst: Optional[tuple[str, int]] = None) -> ProcessInfo:
     """peer_ip/peer_port = endereço de origem visto pelo nosso servidor (o socket efêmero do
-    processo cliente); listen_port = porta em que o nosso listener está escutando."""
+    processo cliente); listen_port = porta em que o nosso listener está escutando.
+
+    `original_dst` só vem do modo transparente: lá o app discou o destino real e foi desviado
+    pra cá por NAT (nftables/WinDivert) sem saber — o socket DELE continua registrado na tabela
+    do SO com o destino original como endereço remoto, nunca com a nossa porta. Sem aceitar esse
+    destino também, nenhum app era identificado no modo transparente (regras por app nunca
+    batiam e tudo caía na ação padrão)."""
     try:
         conns = psutil.net_connections(kind="tcp")
     except (psutil.AccessDenied, PermissionError):
         return UNKNOWN
 
+    own_pid = os.getpid()
     for c in conns:
-        if not c.laddr or not c.raddr:
+        if not c.laddr or not c.raddr or not c.pid or c.pid == own_pid:
             continue
-        if c.laddr.port == peer_port and c.raddr.port == listen_port and c.pid:
+        if c.laddr.port != peer_port:
+            continue
+        if c.raddr.port == listen_port:
+            return _resolve_process(c.pid)
+        if (original_dst is not None and c.raddr.port == original_dst[1]
+                and _same_ip(c.raddr.ip, original_dst[0])):
             return _resolve_process(c.pid)
     return UNKNOWN
+
+
+def _same_ip(a: str, b: str) -> bool:
+    # Sockets IPv6 dual-stack reportam destinos IPv4 como "::ffff:1.2.3.4".
+    return a.removeprefix("::ffff:") == b.removeprefix("::ffff:")
 
 
 def _resolve_process(pid: int) -> ProcessInfo:

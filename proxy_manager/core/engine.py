@@ -394,12 +394,16 @@ class ProxyEngine:
 
     async def _prepare(self, target_host: str, target_port: int, peer_ip: str, peer_port: int,
                         listen_port: int, protocol: str, match_host: Optional[str] = None,
+                        original_dst: Optional[tuple[str, int]] = None,
                         ) -> tuple[MatchResult, Optional[ProxyProfile], LogEntry]:
         """`match_host` só é usado pelo modo transparente: lá, `target_host` é sempre o IP real
         (recuperado via SO_ORIGINAL_DST/NAT, precisa continuar valendo pras regras por IP/CIDR),
         enquanto `match_host` é o domínio, quando dá pra descobrir espiando SNI/Host — usado nas
-        regras por domínio e no log, no lugar do IP cru."""
-        proc = await asyncio.to_thread(process_lookup.lookup_by_local_peer, peer_ip, peer_port, listen_port)
+        regras por domínio e no log, no lugar do IP cru. `original_dst` (também só do modo
+        transparente) é o destino que o app discou — necessário pra achar o processo dono da
+        conexão, ver process_lookup.lookup_by_local_peer."""
+        proc = await asyncio.to_thread(process_lookup.lookup_by_local_peer, peer_ip, peer_port,
+                                       listen_port, original_dst)
         ip_literal = _literal_ip(target_host)
         host_for_rules = match_host or target_host
         match = self.rule_set.match(proc.name, proc.path, host_for_rules, ip_literal,
@@ -628,7 +632,8 @@ class ProxyEngine:
 
         match, profile, entry = await self._prepare(target_host, target_port, peer[0], peer[1],
                                                       self.config.settings.transparent_port,
-                                                      "transparente", match_host=sniffed_host)
+                                                      "transparente", match_host=sniffed_host,
+                                                      original_dst=destination)
 
         if match.action_kind == "block":
             writer.close()

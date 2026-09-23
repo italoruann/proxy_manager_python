@@ -112,3 +112,12 @@ def test_round_trip_to_text_reparses_equivalently():
         assert r1.pattern == r2.pattern
         assert r1.action == r2.action
         assert r1.apps == r2.apps
+
+
+def test_app_matches_linux_launcher_aliases():
+    # /usr/bin/google-chrome é um script que faz exec de /opt/google/chrome/chrome
+    assert app_matches(["google-chrome"], "chrome", "/opt/google/chrome/chrome")
+    # Chromium em snap (Ubuntu): /snap/bin/chromium roda um processo "chrome"
+    assert app_matches(["chromium"], "chrome", "/snap/chromium/3000/usr/lib/chromium-browser/chrome")
+    assert app_matches(["microsoft-edge"], "msedge", "/opt/microsoft/msedge/msedge")
+    assert not app_matches(["google-chrome"], "firefox", "/usr/lib/firefox/firefox")

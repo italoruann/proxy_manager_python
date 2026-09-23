@@ -82,6 +82,10 @@ class LinuxTransparentMode:
         if os.geteuid() != 0:
             return False, ("Modo transparente no Linux exige privilégio de root (pra configurar "
                             "nftables). Rode o Proxy Manager com sudo/pkexec.")
+        if which("nft") is None:
+            # Fedora traz o nft por padrão; Ubuntu/Debian desktop geralmente não.
+            return False, ("Comando 'nft' não encontrado. Instale o nftables (Ubuntu/Debian: "
+                            "sudo apt install nftables; Fedora: sudo dnf install nftables).")
 
         # Se sobrou uma tabela de uma execução anterior que não terminou limpa (ex.: o processo
         # morreu sem chamar stop()), começa removendo ela — evita "table already exists".

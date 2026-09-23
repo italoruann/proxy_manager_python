@@ -23,6 +23,7 @@ def fake_root(monkeypatch):
     # os.geteuid só existe em POSIX — raising=False permite rodar esses testes também no
     # Windows (onde o atributo nem existe no módulo os de verdade).
     monkeypatch.setattr(mod.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(mod, "which", lambda name: f"/usr/sbin/{name}")
 
 
 @pytest.fixture()
@@ -118,3 +119,10 @@ def test_get_original_destination_returns_none_without_socket():
             return None
 
     assert get_original_destination(_FakeWriter()) is None
+
+
+def test_start_explains_how_to_install_nft_when_missing(fake_root, monkeypatch):
+    monkeypatch.setattr(mod, "which", lambda name: None)
+    ok, message = mod.LinuxTransparentMode(58095).start()
+    assert ok is False
+    assert "apt install nftables" in message

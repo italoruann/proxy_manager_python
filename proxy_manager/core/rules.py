@@ -40,6 +40,33 @@ def _normalize_app(name: str) -> str:
     return base.lower()
 
 
+# No Linux, o comando que o usuário conhece (e escolhe em "Procurar…") muitas vezes NÃO é o
+# processo que abre as conexões: /usr/bin/google-chrome é um link pra um script shell que faz
+# exec de /opt/google/chrome/chrome; /snap/bin/chromium (Ubuntu) roda um processo "chrome";
+# e por aí vai. Sem esse mapa, uma regra "apps: google-chrome" nunca batia com nada.
+_LAUNCHER_ALIASES: dict[str, frozenset[str]] = {
+    name: frozenset(procs)
+    for names, procs in (
+        (("google-chrome", "google-chrome-stable", "google-chrome-beta", "google-chrome-unstable",
+          "chromium", "chromium-browser"), ("chrome", "chromium", "chromium-browser")),
+        (("microsoft-edge", "microsoft-edge-stable", "microsoft-edge-beta", "microsoft-edge-dev"),
+         ("msedge",)),
+        (("brave-browser", "brave-browser-stable", "brave"), ("brave",)),
+        (("vivaldi", "vivaldi-stable"), ("vivaldi-bin",)),
+        (("opera",), ("opera",)),
+        (("firefox", "firefox-esr"), ("firefox", "firefox-bin", "firefox-esr")),
+    )
+    for name in names
+}
+
+
+def _process_names_for(wanted: str) -> set[str]:
+    w = _normalize_app(wanted)
+    names = {w, os.path.splitext(w)[0]}
+    names |= _LAUNCHER_ALIASES.get(w, frozenset())
+    return names
+
+
 def app_matches(rule_apps: list[str], app_name: str, app_path: str) -> bool:
     if not rule_apps:
         return True
@@ -49,12 +76,7 @@ def app_matches(rule_apps: list[str], app_name: str, app_path: str) -> bool:
         candidates.add(_normalize_app(os.path.splitext(app_path)[0]))
     if app_name:
         candidates.add(_normalize_app(os.path.splitext(app_name)[0]))
-    for wanted in rule_apps:
-        w = _normalize_app(wanted)
-        w_noext = os.path.splitext(w)[0]
-        if w in candidates or w_noext in candidates:
-            return True
-    return False
+    return any(_process_names_for(wanted) & candidates for wanted in rule_apps)
 
 
 def pattern_matches(pattern: str, host: Optional[str], ip: Optional[str]) -> bool:
