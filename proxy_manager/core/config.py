@@ -34,8 +34,8 @@ DEFAULT_RULES_TEXT = """\
 #   padrao.dominio.com +proxy:nome      -> vai por um perfil de proxy especifico
 #   padrao.dominio.com +block           -> bloqueia a conexao
 
-*.azure.com
-*.digitalocean.com
+*.example.com
+*.example.org
 
 *.paypal.com +direct
 *.stripe.com +direct

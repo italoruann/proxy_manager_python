@@ -6,14 +6,21 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $RepoRoot
 
-$VenvPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
-$Python = if (Test-Path $VenvPython) { $VenvPython } else { "python" }
+if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+    throw "uv nao encontrado -- instale em https://docs.astral.sh/uv/getting-started/installation/"
+}
+
+# Garante o .venv com as dependencias do app + grupo "build" (PyInstaller) travadas no uv.lock.
+uv sync --locked --group build
+if ($LASTEXITCODE -ne 0) { throw "uv sync falhou" }
 
 Write-Host "Gerando icone..."
-& $Python packaging\generate_icon.py
+uv run --no-sync python packaging\generate_icon.py
+if ($LASTEXITCODE -ne 0) { throw "Falha ao gerar o icone" }
 
 Write-Host "`nRodando PyInstaller..."
-& $Python -m PyInstaller packaging\proxy_manager.spec --noconfirm --distpath dist --workpath build
+uv run --no-sync python -m PyInstaller packaging\proxy_manager.spec --noconfirm --distpath dist --workpath build
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller falhou" }
 
 Write-Host "`nExecutavel gerado em dist\ProxyManager.exe"
 Write-Host "Ele pede elevacao (UAC) automaticamente toda vez que voce abrir -- nao precisa mais"

@@ -1,115 +1,153 @@
 # Proxy Manager
 
-Um gerenciador de proxy multiplataforma (Windows e Linux), inspirado no Proxifier, com regras
-avançadas por aplicativo e por domínio, múltiplos perfis de proxy (SOCKS5/HTTP) e um log de
-conexões em tempo real para você confirmar que o proxy está realmente sendo usado.
+Gerenciador de proxy para Windows e Linux, inspirado no Proxifier.
 
-## Como funciona (modo explícito)
+- Regras por **aplicativo** e por **domínio** (direto, via proxy ou bloqueado)
+- Vários perfis de proxy **SOCKS5** e **HTTP**
+- Log de conexões em tempo real, pra confirmar que o proxy está sendo usado
 
-1. O programa sobe dois servidores locais em `127.0.0.1`: um **SOCKS5** e um **HTTP** (com
-   suporte a `CONNECT` para HTTPS).
-2. Ele pode configurar automaticamente o proxy do sistema operacional para usar um arquivo
-   **PAC** servido localmente, fazendo com que navegadores e a maioria dos programas passem a
-   rotear o tráfego pelos listeners acima — sem precisar configurar cada aplicativo manualmente.
-3. Toda conexão que chega é identificada (processo de origem, domínio/IP de destino) e passa
-   pelo motor de regras, que decide: ir **direto**, ir **via um proxy** específico, ou ser
-   **bloqueada**.
-4. Cada decisão fica visível, em tempo real, na página **Logs**.
+---
 
-> Apps que ignoram completamente as configurações de proxy do sistema não são capturados no
-> modo explícito acima. Para esses casos existe o **modo transparente** (aba Configurações):
-> interceptação em nível de sistema, via `nftables` (Linux) ou o driver WinDivert/`pydivert`
-> (Windows), redirecionando qualquer conexão TCP de saída pro Proxy Manager sem o app precisar
-> cooperar. Exige rodar como root/administrador. Cobre só TCP/IPv4 — QUIC/HTTP3 (UDP) ainda
-> passa direto. Regras por domínio continuam funcionando nesse modo por meio de uma espiada
-> passiva no SNI (HTTPS) ou no cabeçalho Host (HTTP); veja `proxy_manager/core/transparent/`.
+## Passo a passo
+
+### 1. Instale o uv
+
+O projeto usa o [uv](https://docs.astral.sh/uv/) para gerenciar Python e dependências.
+
+**Windows** (PowerShell):
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+**Linux**:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Feche e abra o terminal de novo, depois confira com `uv --version`.
+
+### 2. Baixe o projeto
+
+```bash
+git clone <url-do-repositorio> proxy_manager_python
+cd proxy_manager_python
+```
+
+### 3. Instale as dependências
+
+```bash
+uv sync
+```
+
+Esse comando cria a pasta `.venv` e instala tudo o que está no `uv.lock`. Se você não tiver
+o **Python 3.14+**, o uv baixa sozinho, então não precisa instalar o Python antes.
+
+### 4. Abra o programa
+
+```bash
+uv run python -m proxy_manager
+```
+
+### 5. Configure no app
+
+1. Na aba **Proxies**, cadastre seu proxy (SOCKS5 ou HTTP).
+2. Na aba **Regras**, defina o que passa pelo proxy (veja [Regras](#regras)).
+3. No **Dashboard**, ligue o motor.
+4. Acompanhe as conexões na aba **Logs**.
+
+---
 
 ## Regras
 
-Arquivo de regras (editável tanto em tabela quanto em texto na aba **Regras**):
+As regras podem ser editadas em tabela ou em texto na aba **Regras**:
 
 ```
-apps: chrome.exe, msedge.exe      # escopo por app (opcional; "apps: *" volta a valer para todos)
-*.azure.com
-*.digitalocean.com
+apps: chrome.exe, msedge.exe
+*.example.com
+*.example.org
 
 apps: *
-*.paypal.com +direct
-*.stripe.com +direct
-
-*.interno.corp +proxy:vpn-escritorio
+*.meubanco.com.br +direct
+*.interno.corp +proxy:trabalho
 ads.tracker.com +block
 ```
 
-- Regras são avaliadas de cima para baixo; a primeira que casar (aplicativo **e** destino) vence.
-- Sem sufixo: usa o proxy padrão. `+direct`: vai direto. `+block`: bloqueia. `+proxy:nome`: usa
-  um perfil de proxy específico.
-- Alvos aceitam `*.dominio.com`, IP exato ou CIDR (`10.0.0.0/8`).
-- Prefixe uma linha com `!` para desabilitá-la sem apagar.
+| Sintaxe                  | Efeito                                               |
+| ------------------------ | ---------------------------------------------------- |
+| `dominio.com`            | Vai pelo proxy padrão                                |
+| `dominio.com +direct`    | Vai direto, sem proxy                                |
+| `dominio.com +proxy:nome`| Vai por um perfil de proxy específico                |
+| `dominio.com +block`     | Bloqueia a conexão                                   |
+| `apps: a.exe, b`         | As regras abaixo valem só para esses apps            |
+| `apps: *`                | As regras abaixo voltam a valer para todos os apps   |
+| `! regra`                | Desativa a linha sem apagar                          |
 
-## Instalação e execução
+- Avaliadas **de cima para baixo**: a primeira que casar vence.
+- Alvos aceitos: `*.dominio.com`, IP exato ou faixa CIDR (`10.0.0.0/8`).
 
-```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate      Linux: source .venv/bin/activate
-pip install -r requirements-dev.txt
-python -m proxy_manager
-```
+---
 
-Pra usar o **modo transparente** no Linux (exige root) sem precisar empacotar nada, `sudo`
-sozinho costuma falhar pra apps gráficos (o `root` não tem acesso à sua sessão Wayland/X11 por
-padrão). Rode `./scripts/run_linux_admin.sh` em vez disso — ele libera o root pro seu display e
-abre o app elevado via `pkexec`.
+## Modos de funcionamento
 
-## Executável empacotado (abre já elevado)
+**Explícito (padrão):** o app sobe servidores SOCKS5 e HTTP em `127.0.0.1` e configura o proxy
+do sistema com um arquivo PAC. Navegadores e a maioria dos programas passam a usar o Proxy Manager
+sem configuração manual.
 
-Pra não precisar de terminal elevado nem configurar "Executar como administrador" toda vez,
-dá pra gerar um executável standalone (não precisa de Python instalado na máquina de destino)
-que já pede elevação sozinho ao abrir:
+**Transparente** (aba **Configurações**): intercepta as conexões TCP no nível do sistema, o que
+pega até os apps que ignoram o proxy do sistema. Usa `nftables` no Linux e WinDivert no Windows.
+**Exige administrador/root.**
 
-```bash
-pip install -r requirements-build.txt
-```
-
-**Windows** (`scripts/build_windows.ps1`): gera `dist\ProxyManager.exe` com um manifesto UAC
-embutido (`uac_admin`) — todo clique nele já pede elevação, sem passo manual nenhum. O
-início automático (aba Configurações) usa uma Tarefa Agendada com `/RL HIGHEST`, não a chave
-`Run` do registro — itens do `Run` sobem sem privilégio nenhum no login e nunca conseguiriam
-abrir um executável que exige admin.
-
-**Linux** (`scripts/build_linux.sh`, rodar em Linux — PyInstaller não faz cross-compile): gera
-`dist/proxy-manager`. Diferente do Windows, um executável Linux não tem como se auto-elevar
-sozinho ao ser aberto — e colocar bit SUID nele seria uma vulnerabilidade conhecida (um binário
-PyInstaller extrai bibliotecas pra um diretório temporário em tempo de execução, o que abre
-brecha de escalonamento de privilégio). Em vez disso, `sudo packaging/linux/install.sh` instala
-em `/opt/proxy-manager` e registra um atalho que abre via `pkexec` — pede a senha graficamente,
-sem terminal nem sudo, exatamente como o UAC do Windows. `packaging/linux/proxy-manager.sh`
-faz a mesma coisa por linha de comando.
-
-## Testes
+No Linux, abra o app elevado com o script abaixo em vez de `sudo`, que costuma falhar com apps
+gráficos:
 
 ```bash
-pytest tests/
+./scripts/run_linux_admin.sh
 ```
 
-Inclui testes de unidade do motor de regras, testes de integração do engine (SOCKS5/HTTP reais
-em loopback) e um smoke test da interface gráfica (offscreen, sem precisar de tela).
+---
 
-## Limitações conhecidas / roadmap
+## Gerar executável
 
-- Modo transparente cobre só TCP/IPv4. Sem suporte a UDP — QUIC/HTTP3 (usado por padrão pelo
-  Chrome em vários sites Google e CDNs) não é interceptado nem no modo transparente nem no
-  explícito; desative QUIC no navegador (`chrome://flags/#enable-quic`) se isso for um problema.
-- No modo transparente, a tradução de pacotes do Windows (WinDivert/`pydivert`) foi implementada
-  seguindo a técnica padrão de NAT em espaço de usuário, mas só pode ser validada de fato rodando
-  como Administrador numa máquina real — teste com cautela antes de depender dela no dia a dia.
-- O empacotamento Windows (`ProxyManager.exe` com UAC embutido) foi gerado e verificado nesta
-  máquina — o manifesto `requireAdministrator` está de fato no binário. O empacotamento Linux
-  (`scripts/build_linux.sh`, `packaging/linux/`) não foi testado numa máquina Linux real; o
-  fluxo via `pkexec` segue a prática padrão do PolicyKit, mas confirme antes de depender dele.
-- SOCKS5 (modo explícito) só resolve por domínio se o próprio app enviar o hostname (remote DNS);
-  caso contrário, o motor só enxerga o IP de destino (regras CIDR/IP ainda funcionam normalmente).
-- Sem UDP ASSOCIATE no modo explícito (só TCP/CONNECT), cobre a grande maioria dos usos.
-- Firefox não segue automaticamente as configurações de proxy do Windows/GNOME por padrão em
-  todas as instalações — pode ser necessário colar a URL do PAC manualmente em
+Gera um executável que roda sem Python instalado e já pede permissão de administrador ao abrir.
+
+**Windows**: gera `dist\ProxyManager.exe`, que pede UAC ao abrir.
+
+```powershell
+.\scripts\build_windows.ps1
+```
+
+**Linux** (rode numa máquina Linux): gera `dist/proxy-manager` e depois instala em
+`/opt/proxy-manager` com um atalho no menu, que pede a senha via `pkexec`.
+
+```bash
+./scripts/build_linux.sh
+sudo packaging/linux/install.sh
+```
+
+---
+
+## Desenvolvimento
+
+| Comando                  | O que faz                     |
+| ------------------------ | ----------------------------- |
+| `uv run pytest`          | Roda os testes                |
+| `uv add <pacote>`        | Adiciona uma dependência      |
+| `uv remove <pacote>`     | Remove uma dependência        |
+| `uv sync --upgrade`      | Atualiza as dependências      |
+
+Não edite o `uv.lock` à mão: os comandos acima já atualizam ele junto com o `pyproject.toml`.
+
+---
+
+## Limitações conhecidas
+
+- **Só TCP/IPv4.** QUIC/HTTP3 (UDP) não é interceptado. Se precisar, desative o QUIC no navegador
+  (`chrome://flags/#enable-quic`).
+- **SOCKS5 e domínios:** as regras por domínio só funcionam se o app enviar o hostname (remote
+  DNS). Caso contrário, só as regras por IP/CIDR se aplicam.
+- **Firefox** pode não seguir o proxy do sistema. Se acontecer, cole a URL do PAC em
   Configurações → Rede.
+- **Não validado em máquina real:** o modo transparente no Windows e o empacotamento Linux ainda
+  não foram testados. Teste com cautela antes de depender deles.

@@ -212,7 +212,7 @@ def test_add_app_catchall_offers_registered_apps_instead_of_free_typing(window, 
 def test_logs_page_filters_do_not_crash(window):
     window.nav_buttons[3].click()
     page = window.logs_page
-    page.search_edit.setText("azure")
+    page.search_edit.setText("example")
     page.action_combo.setCurrentIndex(1)
     page.protocol_combo.setCurrentIndex(1)
     page.search_edit.setText("")

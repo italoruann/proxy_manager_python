@@ -50,7 +50,7 @@ class WindowsTransparentMode:
         try:
             import pydivert
         except ImportError:
-            return False, "Pacote 'pydivert' não instalado. Rode: pip install pydivert"
+            return False, "Pacote 'pydivert' não instalado. Rode: uv sync"
 
         filter_expr = (
             f"tcp and ("

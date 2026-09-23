@@ -299,7 +299,7 @@ class SettingsPage(QWidget):
             "modo explícito acima não cobre). Exige rodar o Proxy Manager como "
             "administrador/root. No Linux usa nftables (já vem por padrão em quase toda distro "
             "atual, inclusive Fedora); no Windows usa o driver WinDivert via o pacote "
-            "'pydivert' (pip install pydivert). Cobre só "
+            "'pydivert' (instalado junto pelo uv sync). Cobre só "
             "TCP — QUIC/HTTP3 (UDP) ainda passa direto, sem ser interceptado. Liga e desliga "
             "sozinho junto com o motor, igual à integração via PAC acima. Se o motor estiver "
             "ativo, ele será reiniciado automaticamente ao salvar."

@@ -2,8 +2,8 @@ from proxy_manager.core.rules import RuleSet, pattern_matches, app_matches
 
 SAMPLE = """
 # comentário deve ser ignorado
-*.azure.com
-*.digitalocean.com
+*.example.com
+*.example.net
 
 *.paypal.com +direct
 *.stripe.com +direct
@@ -17,7 +17,7 @@ ads.tracker.com +block
 def test_parse_basic_rules():
     rs = RuleSet.parse(SAMPLE)
     assert len(rs.rules) == 6
-    assert rs.rules[0].pattern == "*.azure.com"
+    assert rs.rules[0].pattern == "*.example.com"
     assert rs.rules[0].action == "proxy"
     assert rs.rules[0].apps == []
 
@@ -30,7 +30,7 @@ def test_direct_suffix():
 
 def test_default_proxy_when_no_suffix():
     rs = RuleSet.parse(SAMPLE)
-    match = rs.match("firefox", "/usr/bin/firefox", "westus.azure.com", None)
+    match = rs.match("firefox", "/usr/bin/firefox", "westus.example.com", None)
     assert match.action_kind == "proxy"
     assert match.proxy_name is None  # usa o proxy padrão
 
@@ -95,11 +95,11 @@ def test_app_scoped_catch_all_sends_only_that_app_via_proxy():
     rs = RuleSet.parse("apps: chrome.exe\n*\n")
 
     chrome_match = rs.match("chrome.exe", "C:/Program Files/Google/Chrome/chrome.exe",
-                             "digitalocean.com", None, default_action="direct")
+                             "example.org", None, default_action="direct")
     assert chrome_match.action_kind == "proxy"
 
     other_match = rs.match("spotify.exe", "C:/Program Files/Spotify/Spotify.exe",
-                            "digitalocean.com", None, default_action="direct")
+                            "example.org", None, default_action="direct")
     assert other_match.action_kind == "direct"
 
 

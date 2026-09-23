@@ -2,21 +2,37 @@
 name = "proxy-manager"
 version = "0.1.0"
 description = "Gerenciador de proxy multiplataforma com regras avançadas por aplicativo e domínio, inspirado no Proxifier."
-requires-python = ">=3.10"
-dependencies = [
-    "PySide6>=6.7",
-    "psutil>=5.9",
-    "platformdirs>=4.0",
-    "keyring>=24.0",
+readme = "README.md"
+requires-python = ">=3.14"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
 ]
-
-[project.optional-dependencies]
-# Só necessário pra ligar o modo transparente no Windows (driver WinDivert). No Linux, o modo
-# transparente usa o binário `iptables` do sistema — nenhuma dependência Python extra.
-transparent-windows = ["pydivert>=2.1; sys_platform == 'win32'"]
+# Versões mínimas escolhidas por serem as primeiras com wheels para Python 3.14.
+dependencies = [
+    "PySide6>=6.10",
+    "psutil>=7.1",
+    "platformdirs>=4.0",
+    "keyring>=25.0",
+    # Só necessário pra ligar o modo transparente no Windows (driver WinDivert); ignorado em outros
+    # SOs. No Linux, o modo transparente usa o nftables do sistema — nenhuma dependência extra.
+    "pydivert>=2.1; sys_platform == 'win32'",
+]
 
 [project.scripts]
 proxy-manager = "proxy_manager.main:main"
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+# Empacotamento standalone (scripts/build_windows.ps1 e scripts/build_linux.sh).
+build = ["pyinstaller>=6.16"]
+
+[tool.uv]
+# `uv sync` instala só o grupo dev por padrão; o de build é pedido explicitamente pelos scripts.
+default-groups = ["dev"]
 
 [build-system]
 requires = ["setuptools>=68"]

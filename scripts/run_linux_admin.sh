@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 if [ ! -x "$ROOT/.venv/bin/python" ]; then
     echo "Não encontrei $ROOT/.venv/bin/python -- crie o venv e instale as dependências primeiro:" >&2
-    echo "  python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements-dev.txt" >&2
+    echo "  uv sync" >&2
     exit 1
 fi
 
