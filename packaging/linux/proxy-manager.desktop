@@ -2,7 +2,7 @@
 Type=Application
 Name=Proxy Manager
 Comment=Gerenciador de proxy multiplataforma com regras avançadas por aplicativo e domínio
-Exec=pkexec /opt/proxy-manager/proxy-manager
+Exec=/opt/proxy-manager/proxy-manager.sh
 Icon=/opt/proxy-manager/icon.png
 Terminal=false
 Categories=Network;
