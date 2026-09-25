@@ -125,10 +125,13 @@ def _apply_linux(url: str, http_port: int) -> tuple[bool, str]:
         try:
             _run_as_desktop_user(["gsettings", "set", "org.gnome.system.proxy", "mode", "auto"])
             _run_as_desktop_user(["gsettings", "set", "org.gnome.system.proxy", "autoconfig-url", url])
-            messages.append("GNOME/gsettings configurado.")
-            ok_any = True
+            if _gsettings_persisted(url):
+                messages.append("GNOME/gsettings configurado.")
+                ok_any = True
+            else:
+                messages.append(_GSETTINGS_NOT_PERSISTED)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
-            messages.append(f"gsettings falhou: {exc}")
+            messages.append(f"gsettings falhou: {_cmd_error(exc)} {_GSETTINGS_NOT_PERSISTED}")
 
     kwriteconfig = _find_kwriteconfig()
     if kwriteconfig:
@@ -172,6 +175,33 @@ def _remove_linux() -> tuple[bool, str]:
     return True, " ".join(messages) if messages else "Nenhuma alteração de sistema para reverter."
 
 
+# Chrome/Chromium leem o proxy do gsettings no GNOME, Cinnamon, Xfce, LXQt, etc. Distros mínimas
+# (Arch com Xfce, por exemplo) muitas vezes não trazem o schema org.gnome.system.proxy — o set
+# falha com "No such schema" — ou o dconf, e aí o gsettings cai no backend em memória: o set
+# "funciona", mas nada é gravado e o navegador nunca vê o PAC.
+_GSETTINGS_NOT_PERSISTED = (
+    "A configuração de proxy do gsettings não foi gravada — faltam o schema e/ou o backend dconf "
+    "(Arch: sudo pacman -S gsettings-desktop-schemas dconf; depois reinicie a sessão e o navegador)."
+)
+
+
+def _gsettings_persisted(url: str) -> bool:
+    """Relê os valores num processo novo: com o backend em memória, ele volta ao padrão."""
+    try:
+        mode = _capture_as_desktop_user(["gsettings", "get", "org.gnome.system.proxy", "mode"])
+        pac = _capture_as_desktop_user(["gsettings", "get", "org.gnome.system.proxy", "autoconfig-url"])
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        return False
+    return mode.strip().strip("'") == "auto" and pac.strip().strip("'") == url
+
+
+def _cmd_error(exc: Exception) -> str:
+    stderr = getattr(exc, "stderr", None)
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode(errors="replace")
+    return (stderr or "").strip() or str(exc)
+
+
 def _find_kwriteconfig() -> str | None:
     return next((name for name in _KWRITECONFIG_BINARIES if _has_binary(name)), None)
 
@@ -189,6 +219,10 @@ def _desktop_uid() -> int | None:
 
 
 def _run_as_desktop_user(cmd: list[str]) -> None:
+    _capture_as_desktop_user(cmd)
+
+
+def _capture_as_desktop_user(cmd: list[str]) -> str:
     """gsettings/kwriteconfig gravam na config do usuário que os executa. Elevado via pkexec
     (necessário pro modo transparente), isso configurava o proxy do ROOT — o Chrome e o resto da
     sessão do usuário nunca viam a mudança. Aqui rodamos como o usuário de verdade, apontando pro
@@ -200,7 +234,8 @@ def _run_as_desktop_user(cmd: list[str]) -> None:
         cmd = ["runuser", "-u", user.pw_name, "--", "env",
                f"HOME={user.pw_dir}", f"XDG_RUNTIME_DIR=/run/user/{uid}",
                f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus", *cmd]
-    subprocess.run(cmd, check=True, capture_output=True, timeout=5)
+    result = subprocess.run(cmd, check=True, capture_output=True, timeout=5)
+    return result.stdout.decode(errors="replace")
 
 
 def _write_env_script(http_port: int) -> Path:
