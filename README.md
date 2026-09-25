@@ -50,6 +50,10 @@ o **Python 3.14+**, o uv baixa sozinho, então não precisa instalar o Python an
 uv run python -m proxy_manager
 ```
 
+No Linux, se faltarem as bibliotecas de sistema que o Qt precisa (como a `libxcb-cursor`), o app
+instala sozinho pelo gerenciador de pacotes da distro (pacman, apt, dnf ou zypper), pedindo a
+senha via `sudo` ou `pkexec`. Para desativar, use `PROXY_MANAGER_SKIP_DEPS=1`.
+
 ### 5. Configure no app
 
 1. Na aba **Proxies**, cadastre seu proxy (SOCKS5 ou HTTP).

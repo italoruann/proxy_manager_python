@@ -5,6 +5,10 @@ import sys
 
 
 def main() -> None:
+    from .linux_qt_deps import ensure_qt_system_libs
+
+    ensure_qt_system_libs()  # tem que rodar antes do QApplication carregar o plugin de plataforma
+
     from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
     from .gui.app_context import AppContext
