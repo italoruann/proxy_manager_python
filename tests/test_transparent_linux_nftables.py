@@ -62,6 +62,10 @@ def test_start_applies_expected_nftables_rules(fake_root, record_commands):
     # a exclusão do próprio tráfego (evita loop) precisa existir
     owner_calls = [c for c in record_commands if "skuid" in c]
     assert owner_calls, "deveria excluir o próprio uid do redirect pra evitar loop"
+    # QUIC e TCP/IPv6 não são interceptáveis: precisam ser rejeitados pra não vazarem direto
+    reject_calls = [c for c in record_commands if "reject" in c]
+    assert any("udp" in c and "443" in c for c in reject_calls), "QUIC deveria ser rejeitado"
+    assert any("ipv6" in c and "tcp" in c for c in reject_calls), "TCP/IPv6 deveria ser rejeitado"
     # tudo isolado numa tabela própria (nunca mexe em OUTPUT/chains do sistema)
     assert all("OUTPUT" not in c for c in record_commands)
 
@@ -73,7 +77,7 @@ def test_stop_removes_table_and_is_idempotent(fake_root, record_commands):
 
     ok, message = backend.stop()
     assert ok is True
-    assert record_commands == [["nft", "delete", "table", "ip", mod.TABLE_NAME]]
+    assert record_commands == [["nft", "delete", "table", "inet", mod.TABLE_NAME]]
 
     # chamar stop() de novo sem um start() no meio não deve tentar rodar comandos de novo
     record_commands.clear()

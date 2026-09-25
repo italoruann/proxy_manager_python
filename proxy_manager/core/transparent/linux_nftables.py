@@ -2,7 +2,8 @@
 ProxyEngine via NAT (nftables) e recupera o destino original com SO_ORIGINAL_DST — a mesma
 técnica usada por ferramentas como redsocks, só que com `nft` em vez de `iptables`. Cobre só
 IPv4/TCP: UDP (necessário pra QUIC/HTTP3) fica fora do escopo desta fase, assim como já é no modo
-explícito (SOCKS5 só suporta CONNECT).
+explícito (SOCKS5 só suporta CONNECT) — por isso QUIC e TCP sobre IPv6 são rejeitados enquanto o
+modo está ativo, forçando os apps a voltarem pro TCP/IPv4 que conseguimos interceptar.
 
 Por que nft e não iptables: nftables é o backend nativo do firewalld e já vem instalado por
 padrão em praticamente toda distro atual (inclusive Fedora, que vem tirando aos poucos o binário
@@ -65,7 +66,9 @@ def _cmd_error(exc: Exception) -> str:
 
 
 def _delete_table_ignoring_errors() -> None:
-    subprocess.run(["nft", "delete", "table", "ip", TABLE_NAME], capture_output=True, timeout=5)
+    # "ip" é a família usada por versões antigas (só IPv4) — remove também, se tiver sobrado.
+    for family in ("inet", "ip"):
+        subprocess.run(["nft", "delete", "table", family, TABLE_NAME], capture_output=True, timeout=5)
 
 
 class LinuxTransparentMode:
@@ -90,18 +93,36 @@ class LinuxTransparentMode:
         # Se sobrou uma tabela de uma execução anterior que não terminou limpa (ex.: o processo
         # morreu sem chamar stop()), começa removendo ela — evita "table already exists".
         _delete_table_ignoring_errors()
+        uid = str(os.geteuid())
         try:
-            _run(["nft", "add", "table", "ip", TABLE_NAME])
-            _run(["nft", "add", "chain", "ip", TABLE_NAME, "output",
+            _run(["nft", "add", "table", "inet", TABLE_NAME])
+            _run(["nft", "add", "chain", "inet", TABLE_NAME, "output",
                   "{", "type", "nat", "hook", "output", "priority", "-100", ";", "}"])
             # Nunca redireciona o próprio tráfego do Proxy Manager (evita loop: a conexão que ELE
             # mesmo abre até o destino real, ou até um proxy upstream, também passaria por aqui).
-            _run(["nft", "add", "rule", "ip", TABLE_NAME, "output",
-                  "meta", "skuid", str(os.geteuid()), "return"])
-            _run(["nft", "add", "rule", "ip", TABLE_NAME, "output",
+            _run(["nft", "add", "rule", "inet", TABLE_NAME, "output",
+                  "meta", "skuid", uid, "return"])
+            _run(["nft", "add", "rule", "inet", TABLE_NAME, "output",
                   "ip", "daddr", "127.0.0.0/8", "return"])
-            _run(["nft", "add", "rule", "ip", TABLE_NAME, "output",
-                  "meta", "l4proto", "tcp", "redirect", "to", f":{self.transparent_port}"])
+            _run(["nft", "add", "rule", "inet", TABLE_NAME, "output",
+                  "meta", "nfproto", "ipv4", "meta", "l4proto", "tcp",
+                  "redirect", "to", f":{self.transparent_port}"])
+
+            # Só sabemos interceptar TCP/IPv4. Sem isso, navegadores Chromium (Chrome, Edge,
+            # Brave...) escapavam do proxy mesmo com a regra certa: depois da 1ª conexão eles
+            # trocam pra QUIC (UDP 443) e, em redes com IPv6 (comum em qualquer distro), preferem
+            # IPv6 — os dois passavam direto. Rejeitando na hora (em vez de descartar), o app cai
+            # de imediato pro TCP/IPv4, que é redirecionado acima.
+            _run(["nft", "add", "chain", "inet", TABLE_NAME, "block_unsupported",
+                  "{", "type", "filter", "hook", "output", "priority", "0", ";", "}"])
+            _run(["nft", "add", "rule", "inet", TABLE_NAME, "block_unsupported",
+                  "meta", "skuid", uid, "return"])
+            _run(["nft", "add", "rule", "inet", TABLE_NAME, "block_unsupported",
+                  "oifname", "lo", "return"])
+            _run(["nft", "add", "rule", "inet", TABLE_NAME, "block_unsupported",
+                  "udp", "dport", "443", "reject"])
+            _run(["nft", "add", "rule", "inet", TABLE_NAME, "block_unsupported",
+                  "meta", "nfproto", "ipv6", "meta", "l4proto", "tcp", "reject", "with", "tcp", "reset"])
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
             _delete_table_ignoring_errors()
             return False, f"Falha ao aplicar regras de nftables: {_cmd_error(exc)}"
@@ -113,7 +134,7 @@ class LinuxTransparentMode:
         if not self._active:
             return True, "Modo transparente já estava desligado."
         try:
-            _run(["nft", "delete", "table", "ip", TABLE_NAME])
+            _run(["nft", "delete", "table", "inet", TABLE_NAME])
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
             self._active = False
             return False, f"Modo transparente desligado com avisos (revise o nftables manualmente): {_cmd_error(exc)}"

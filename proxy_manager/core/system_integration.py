@@ -3,6 +3,7 @@ esse PAC via HTTP, e aplica/remove essa configuração como proxy do sistema (Wi
 from __future__ import annotations
 
 import asyncio
+import os
 import platform
 import subprocess
 from pathlib import Path
@@ -112,31 +113,34 @@ def _notify_windows_settings_changed() -> None:
         pass
 
 
+# Plasma 6 (Arch, Fedora 40+, ...) só traz o kwriteconfig6; Plasma 5 só o kwriteconfig5.
+_KWRITECONFIG_BINARIES = ("kwriteconfig6", "kwriteconfig5")
+
+
 def _apply_linux(url: str, http_port: int) -> tuple[bool, str]:
     messages: list[str] = []
     ok_any = False
 
     if _has_binary("gsettings"):
         try:
-            subprocess.run(["gsettings", "set", "org.gnome.system.proxy", "mode", "auto"],
-                            check=True, capture_output=True, timeout=5)
-            subprocess.run(["gsettings", "set", "org.gnome.system.proxy", "autoconfig-url", url],
-                            check=True, capture_output=True, timeout=5)
+            _run_as_desktop_user(["gsettings", "set", "org.gnome.system.proxy", "mode", "auto"])
+            _run_as_desktop_user(["gsettings", "set", "org.gnome.system.proxy", "autoconfig-url", url])
             messages.append("GNOME/gsettings configurado.")
             ok_any = True
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
             messages.append(f"gsettings falhou: {exc}")
 
-    if _has_binary("kwriteconfig5"):
+    kwriteconfig = _find_kwriteconfig()
+    if kwriteconfig:
         try:
-            subprocess.run(["kwriteconfig5", "--file", "kioslaverc", "--group", "Proxy Settings",
-                             "--key", "ProxyType", "2"], check=True, capture_output=True, timeout=5)
-            subprocess.run(["kwriteconfig5", "--file", "kioslaverc", "--group", "Proxy Settings",
-                             "--key", "Proxy Config Script", url], check=True, capture_output=True, timeout=5)
+            _run_as_desktop_user([kwriteconfig, "--file", "kioslaverc", "--group", "Proxy Settings",
+                                  "--key", "ProxyType", "2"])
+            _run_as_desktop_user([kwriteconfig, "--file", "kioslaverc", "--group", "Proxy Settings",
+                                  "--key", "Proxy Config Script", url])
             messages.append("KDE/kioslaverc configurado.")
             ok_any = True
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
-            messages.append(f"kwriteconfig5 falhou: {exc}")
+            messages.append(f"{kwriteconfig} falhou: {exc}")
 
     env_path = _write_env_script(http_port)
     messages.append(f"Script de variáveis de ambiente gerado em {env_path} (use 'source' para apps de terminal).")
@@ -153,19 +157,50 @@ def _remove_linux() -> tuple[bool, str]:
     messages: list[str] = []
     if _has_binary("gsettings"):
         try:
-            subprocess.run(["gsettings", "set", "org.gnome.system.proxy", "mode", "none"],
-                            check=True, capture_output=True, timeout=5)
+            _run_as_desktop_user(["gsettings", "set", "org.gnome.system.proxy", "mode", "none"])
             messages.append("GNOME/gsettings revertido para 'sem proxy'.")
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
             messages.append(f"gsettings falhou: {exc}")
-    if _has_binary("kwriteconfig5"):
+    kwriteconfig = _find_kwriteconfig()
+    if kwriteconfig:
         try:
-            subprocess.run(["kwriteconfig5", "--file", "kioslaverc", "--group", "Proxy Settings",
-                             "--key", "ProxyType", "0"], check=True, capture_output=True, timeout=5)
+            _run_as_desktop_user([kwriteconfig, "--file", "kioslaverc", "--group", "Proxy Settings",
+                                  "--key", "ProxyType", "0"])
             messages.append("KDE/kioslaverc revertido.")
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
-            messages.append(f"kwriteconfig5 falhou: {exc}")
+            messages.append(f"{kwriteconfig} falhou: {exc}")
     return True, " ".join(messages) if messages else "Nenhuma alteração de sistema para reverter."
+
+
+def _find_kwriteconfig() -> str | None:
+    return next((name for name in _KWRITECONFIG_BINARIES if _has_binary(name)), None)
+
+
+def _desktop_uid() -> int | None:
+    """UID do usuário dono da sessão gráfica quando estamos rodando elevados (pkexec/sudo), ou
+    None quando já rodamos como o próprio usuário."""
+    if os.geteuid() != 0:
+        return None
+    for var in ("PKEXEC_UID", "SUDO_UID"):
+        value = os.environ.get(var, "")
+        if value.isdigit() and int(value) != 0:
+            return int(value)
+    return None
+
+
+def _run_as_desktop_user(cmd: list[str]) -> None:
+    """gsettings/kwriteconfig gravam na config do usuário que os executa. Elevado via pkexec
+    (necessário pro modo transparente), isso configurava o proxy do ROOT — o Chrome e o resto da
+    sessão do usuário nunca viam a mudança. Aqui rodamos como o usuário de verdade, apontando pro
+    barramento D-Bus da sessão dele (o gsettings grava via dconf, que depende dele)."""
+    uid = _desktop_uid()
+    if uid is not None:
+        import pwd
+        user = pwd.getpwuid(uid)
+        cmd = ["runuser", "-u", user.pw_name, "--", "env",
+               f"HOME={user.pw_dir}", f"XDG_RUNTIME_DIR=/run/user/{uid}",
+               f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus", *cmd]
+    subprocess.run(cmd, check=True, capture_output=True, timeout=5)
 
 
 def _write_env_script(http_port: int) -> Path:
