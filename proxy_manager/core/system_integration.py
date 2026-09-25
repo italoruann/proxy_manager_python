@@ -145,10 +145,19 @@ def _apply_linux(url: str, http_port: int) -> tuple[bool, str]:
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
             messages.append(f"{kwriteconfig} falhou: {exc}")
 
-    env_path = _write_env_script(http_port)
+    env_path = _write_env_script(http_port, url)
     messages.append(f"Script de variáveis de ambiente gerado em {env_path} (use 'source' para apps de terminal).")
 
-    if not ok_any:
+    desktop = os.environ.get("XDG_CURRENT_DESKTOP", "")
+    if ok_any and desktop and not _chromium_reads_system_proxy(desktop):
+        ok_any = False
+        messages.append(
+            f"Atenção: no ambiente {desktop}, Chrome/Chromium/Edge/Brave ignoram o proxy do sistema "
+            f"(só leem no GNOME, KDE, Cinnamon, Unity, Pantheon, Deepin e UKUI). Abra o navegador com "
+            f"--proxy-pac-url={url} (ex.: no campo Exec= do atalho .desktop dele)."
+        )
+
+    if not ok_any and not desktop:
         messages.append(
             "Nenhum ambiente gráfico suportado automaticamente foi detectado; "
             "configure manualmente a URL do PAC acima nas configurações de rede do seu desktop."
@@ -238,10 +247,21 @@ def _capture_as_desktop_user(cmd: list[str]) -> str:
     return result.stdout.decode(errors="replace")
 
 
-def _write_env_script(http_port: int) -> Path:
+# Ambientes em que o Chromium lê o proxy do sistema (gsettings/kioslaverc); nos demais (Xfce,
+# LXQt, i3, Hyprland...) ele só olha variáveis de ambiente e flags de linha de comando.
+_CHROMIUM_SYSTEM_PROXY_DESKTOPS = ("gnome", "unity", "cinnamon", "x-cinnamon", "pantheon", "deepin",
+                                   "ukui", "kde")
+
+
+def _chromium_reads_system_proxy(xdg_current_desktop: str) -> bool:
+    desktops = {d.strip().lower() for d in xdg_current_desktop.split(":")}
+    return bool(desktops & set(_CHROMIUM_SYSTEM_PROXY_DESKTOPS))
+
+
+def _write_env_script(http_port: int, pac: str = "") -> Path:
     path = data_dir() / "env.sh"
-    # As variáveis de ambiente não suportam PAC; usamos o proxy HTTP local diretamente.
-    # O roteamento por domínio/app continua sendo decidido pelo nosso motor de regras.
+    # A maioria das ferramentas não entende PAC; usamos o proxy HTTP local diretamente. O
+    # roteamento por domínio/app continua sendo decidido pelo nosso motor de regras.
     proxy_addr = f"http://127.0.0.1:{http_port}"
     content = (
         "# Gerado pelo Proxy Manager — source este arquivo para que ferramentas de terminal\n"
@@ -251,6 +271,8 @@ def _write_env_script(http_port: int) -> Path:
         f'export HTTP_PROXY="{proxy_addr}"\n'
         f'export HTTPS_PROXY="{proxy_addr}"\n'
         'export no_proxy="localhost,127.0.0.1"\n'
+        # Chrome/Chromium fora de GNOME/KDE usam o PAC desta variável.
+        + (f'export auto_proxy="{pac}"\n' if pac else "")
     )
     path.write_text(content, encoding="utf-8")
     return path

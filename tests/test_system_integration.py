@@ -61,3 +61,24 @@ def test_gsettings_missing_schema_explains_fix(monkeypatch):
     assert ok is False
     assert "No such schema" in message
     assert "gsettings-desktop-schemas" in message
+
+
+def test_warns_that_chromium_ignores_system_proxy_on_xfce(monkeypatch):
+    _fake_gsettings(monkeypatch, persisted=True)
+    monkeypatch.setenv("XDG_CURRENT_DESKTOP", "XFCE")
+    ok, message = mod._apply_linux(PAC, 58091)
+    assert ok is False
+    assert f"--proxy-pac-url={PAC}" in message
+
+
+def test_gnome_session_needs_no_browser_flag(monkeypatch):
+    _fake_gsettings(monkeypatch, persisted=True)
+    monkeypatch.setenv("XDG_CURRENT_DESKTOP", "ubuntu:GNOME")
+    ok, message = mod._apply_linux(PAC, 58091)
+    assert ok is True
+    assert "--proxy-pac-url" not in message
+
+
+def test_env_script_exports_pac_for_chromium(tmp_path):
+    path = mod._write_env_script(58091, PAC)
+    assert f'export auto_proxy="{PAC}"' in path.read_text(encoding="utf-8")
