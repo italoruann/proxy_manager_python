@@ -15,4 +15,5 @@ fi
 xhost +SI:localuser:root >/dev/null
 
 exec pkexec env DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" QT_QPA_PLATFORM=xcb \
+    XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-}" KDE_SESSION_VERSION="${KDE_SESSION_VERSION:-}" \
     bash -c "cd '$ROOT' && '$ROOT/.venv/bin/python' -m proxy_manager"

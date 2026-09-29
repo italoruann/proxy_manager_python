@@ -120,6 +120,7 @@ _KWRITECONFIG_BINARIES = ("kwriteconfig6", "kwriteconfig5")
 def _apply_linux(url: str, http_port: int) -> tuple[bool, str]:
     messages: list[str] = []
     ok_any = False
+    gsettings_ok = False
 
     if _has_binary("gsettings"):
         try:
@@ -127,23 +128,21 @@ def _apply_linux(url: str, http_port: int) -> tuple[bool, str]:
             _run_as_desktop_user(["gsettings", "set", "org.gnome.system.proxy", "autoconfig-url", url])
             if _gsettings_persisted(url):
                 messages.append("GNOME/gsettings configurado.")
-                ok_any = True
+                ok_any = gsettings_ok = True
             else:
                 messages.append(_GSETTINGS_NOT_PERSISTED)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
             messages.append(f"gsettings falhou: {_cmd_error(exc)} {_GSETTINGS_NOT_PERSISTED}")
 
-    kwriteconfig = _find_kwriteconfig()
-    if kwriteconfig:
+    if _kde_present():
         try:
-            _run_as_desktop_user([kwriteconfig, "--file", "kioslaverc", "--group", "Proxy Settings",
-                                  "--key", "ProxyType", "2"])
-            _run_as_desktop_user([kwriteconfig, "--file", "kioslaverc", "--group", "Proxy Settings",
-                                  "--key", "Proxy Config Script", url])
+            _set_kde_proxy({"ProxyType": "2", "Proxy Config Script": url})
             messages.append("KDE/kioslaverc configurado.")
             ok_any = True
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
-            messages.append(f"{kwriteconfig} falhou: {exc}")
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, RuntimeError) as exc:
+            messages.append(f"KDE/kioslaverc falhou: {_cmd_error(exc)}")
+        if not gsettings_ok:
+            messages.append(_KDE_FIREFOX_NEEDS_GSETTINGS)
 
     env_path = _write_env_script(http_port, url)
     messages.append(f"Script de variáveis de ambiente gerado em {env_path} (use 'source' para apps de terminal).")
@@ -173,14 +172,12 @@ def _remove_linux() -> tuple[bool, str]:
             messages.append("GNOME/gsettings revertido para 'sem proxy'.")
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
             messages.append(f"gsettings falhou: {exc}")
-    kwriteconfig = _find_kwriteconfig()
-    if kwriteconfig:
+    if _kde_present():
         try:
-            _run_as_desktop_user([kwriteconfig, "--file", "kioslaverc", "--group", "Proxy Settings",
-                                  "--key", "ProxyType", "0"])
+            _set_kde_proxy({"ProxyType": "0"})
             messages.append("KDE/kioslaverc revertido.")
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
-            messages.append(f"{kwriteconfig} falhou: {exc}")
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, RuntimeError) as exc:
+            messages.append(f"KDE/kioslaverc falhou: {_cmd_error(exc)}")
     return True, " ".join(messages) if messages else "Nenhuma alteração de sistema para reverter."
 
 
@@ -215,6 +212,120 @@ def _find_kwriteconfig() -> str | None:
     return next((name for name in _KWRITECONFIG_BINARIES if _has_binary(name)), None)
 
 
+# No KDE o Firefox não lê o kioslaverc: só o gsettings (org.gnome.system.proxy) ou as variáveis
+# de ambiente. Sem o gsettings gravando de verdade, só o Chrome/Chromium pega o proxy.
+_KDE_FIREFOX_NEEDS_GSETTINGS = (
+    "Atenção (KDE): o Firefox não lê o proxy do KDE, só o do gsettings — instale gsettings e dconf "
+    "(Fedora: sudo dnf install glib2 dconf gsettings-desktop-schemas; Kubuntu: sudo apt install "
+    "libglib2.0-bin dconf-gsettings-backend gsettings-desktop-schemas) ou configure o PAC direto "
+    "no Firefox (Configurações > Rede > URL de configuração automática de proxy)."
+)
+
+_KIOSLAVERC_GROUP = "Proxy Settings"
+
+
+def _kde_present() -> bool:
+    """Sessão Plasma, kwriteconfig instalado ou um kioslaverc já existente. Rodando via pkexec o
+    ambiente vem limpo (sem XDG_CURRENT_DESKTOP), então não dá pra depender só da variável."""
+    desktops = {d.strip().lower() for d in os.environ.get("XDG_CURRENT_DESKTOP", "").split(":")}
+    if "kde" in desktops or os.environ.get("KDE_SESSION_VERSION") or _find_kwriteconfig():
+        return True
+    try:
+        return _kioslaverc_path().exists()
+    except (KeyError, OSError):
+        return False
+
+
+def _kioslaverc_path() -> Path:
+    """Onde o Chromium e o KIO leem o proxy do KDE no Plasma 5/6: $XDG_CONFIG_HOME/kioslaverc."""
+    uid = _desktop_uid()
+    if uid is not None:
+        import pwd
+        return Path(pwd.getpwuid(uid).pw_dir) / ".config" / "kioslaverc"
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "kioslaverc"
+
+
+def _set_kde_proxy(values: dict[str, str]) -> None:
+    """Grava as chaves no kioslaverc e confere relendo o arquivo. Antes, sem kwriteconfig no PATH
+    (kf6-kconfig/libkf5config-bin ausente, comum no Kubuntu/Debian), o KDE era pulado em silêncio
+    e o Chrome nunca via o PAC — agora caímos para editar o arquivo direto."""
+    kwriteconfig = _find_kwriteconfig()
+    path = _kioslaverc_path()
+    if kwriteconfig:
+        for key, value in values.items():
+            _run_as_desktop_user([kwriteconfig, "--file", "kioslaverc", "--group", _KIOSLAVERC_GROUP,
+                                  "--key", key, value])
+    else:
+        text = _edit_kioslaverc(_read_kioslaverc_text(path), values)
+        _capture_as_desktop_user(["tee", "--", str(path)], stdin=text.encode("utf-8"))
+
+    current = _parse_kioslaverc(_read_kioslaverc_text(path))
+    wrong = [key for key, value in values.items() if current.get(key) != value]
+    if wrong:
+        raise RuntimeError(f"{path} não ficou com {', '.join(wrong)} gravado.")
+    _notify_kde_proxy_changed()
+
+
+def _read_kioslaverc_text(path: Path) -> str:
+    # Lê como o usuário da sessão, não como root: o arquivo fica na HOME dele, que ele controla.
+    return _capture_as_desktop_user(["sh", "-c", 'cat -- "$1" 2>/dev/null || true', "sh", str(path)])
+
+
+def _parse_kioslaverc(text: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    in_group = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("["):
+            in_group = stripped == f"[{_KIOSLAVERC_GROUP}]"
+        elif in_group and "=" in stripped:
+            key, value = stripped.split("=", 1)
+            values[key.strip()] = value.strip()
+    return values
+
+
+def _edit_kioslaverc(text: str, values: dict[str, str]) -> str:
+    """Atualiza/insere as chaves no grupo [Proxy Settings], preservando o resto do arquivo."""
+    header = f"[{_KIOSLAVERC_GROUP}]"
+    pending = dict(values)
+    out: list[str] = []
+    in_group = found = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("["):
+            if in_group:
+                while out and not out[-1].strip():
+                    out.pop()
+                out.extend(f"{k}={v}" for k, v in pending.items())
+                pending.clear()
+                out.append("")
+            in_group = stripped == header
+            found = found or in_group
+        elif in_group and "=" in stripped:
+            key = stripped.split("=", 1)[0].strip()
+            if key in pending:
+                line = f"{key}={pending.pop(key)}"
+        out.append(line)
+    if not found:
+        if out and out[-1].strip():
+            out.append("")
+        out.append(header)
+    out.extend(f"{k}={v}" for k, v in pending.items())
+    return "\n".join(out) + "\n"
+
+
+def _notify_kde_proxy_changed() -> None:
+    """Mesmo sinal que as Configurações do Sistema do Plasma emitem ao salvar o proxy: faz o KIO
+    (Dolphin, Falkon, Konqueror...) reler o kioslaverc sem reiniciar a sessão."""
+    if not _has_binary("dbus-send"):
+        return
+    try:
+        _run_as_desktop_user(["dbus-send", "--session", "--type=signal", "/KIO/Scheduler",
+                              "org.kde.KIO.Scheduler.reparseSlaveConfiguration", "string:"])
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        pass
+
+
 def _desktop_uid() -> int | None:
     """UID do usuário dono da sessão gráfica quando estamos rodando elevados (pkexec/sudo), ou
     None quando já rodamos como o próprio usuário."""
@@ -231,7 +342,7 @@ def _run_as_desktop_user(cmd: list[str]) -> None:
     _capture_as_desktop_user(cmd)
 
 
-def _capture_as_desktop_user(cmd: list[str]) -> str:
+def _capture_as_desktop_user(cmd: list[str], stdin: bytes | None = None) -> str:
     """gsettings/kwriteconfig gravam na config do usuário que os executa. Elevado via pkexec
     (necessário pro modo transparente), isso configurava o proxy do ROOT — o Chrome e o resto da
     sessão do usuário nunca viam a mudança. Aqui rodamos como o usuário de verdade, apontando pro
@@ -243,7 +354,7 @@ def _capture_as_desktop_user(cmd: list[str]) -> str:
         cmd = ["runuser", "-u", user.pw_name, "--", "env",
                f"HOME={user.pw_dir}", f"XDG_RUNTIME_DIR=/run/user/{uid}",
                f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus", *cmd]
-    result = subprocess.run(cmd, check=True, capture_output=True, timeout=5)
+    result = subprocess.run(cmd, check=True, capture_output=True, timeout=5, input=stdin)
     return result.stdout.decode(errors="replace")
 
 

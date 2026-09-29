@@ -47,7 +47,9 @@ fi
 xhost +SI:localuser:root >/dev/null
 
 echo "$(date '+%F %T') iniciando $BIN" >>"$LOG"
+# XDG_CURRENT_DESKTOP/KDE_SESSION_VERSION: o app precisa saber se é Plasma para configurar o KDE.
 pkexec env DISPLAY="$DISPLAY" XAUTHORITY="${XAUTHORITY:-}" QT_QPA_PLATFORM=xcb \
+    XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-}" KDE_SESSION_VERSION="${KDE_SESSION_VERSION:-}" \
     "$BIN" "$@" >>"$LOG" 2>&1
 status=$?
 
