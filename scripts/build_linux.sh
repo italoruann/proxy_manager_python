@@ -87,7 +87,7 @@ stop_running() {
         $SUDO pkill -KILL -x proxy-manager 2>/dev/null || true
         sleep 1
         echo "Desfazendo o proxy dos navegadores/sistema..."
-        run_python -c "from proxy_manager.core.system_integration import remove_system_proxy; print(remove_system_proxy()[1])" || true
+        run_python -c "from proxy_manager.core.system_integration import remove_system_proxy; print(remove_system_proxy(keep_browser_launchers=True)[1])" || true
     fi
 }
 

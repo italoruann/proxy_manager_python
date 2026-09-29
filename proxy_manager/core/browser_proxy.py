@@ -8,8 +8,9 @@ configuramos o próprio navegador, o que funciona igual em qualquer distro e amb
 - Firefox (e derivados, inclusive Flatpak/Snap): bloco no user.js de cada perfil. Os valores
   anteriores ficam guardados no bloco e são restaurados ao remover.
 - Chrome/Chromium/Edge/Brave/Vivaldi/Opera (inclusive Flatpak/Snap): cópia do atalho .desktop em
-  ~/.local/share/applications (que tem prioridade sobre o do sistema) com --proxy-pac-url. Ao
-  remover, apagamos a cópia e o atalho original volta a valer.
+  ~/.local/share/applications (que tem prioridade sobre o do sistema) com --proxy-pac-url. Ela
+  fica quando o motor para (sem o motor o PAC não responde e o navegador conecta direto) e só é
+  apagada ao desativar a integração, com o navegador fechado.
 
 Se o app morrer sem remover, os dois navegadores caem para conexão direta quando o PAC não
 responde — a internet continua funcionando.
@@ -212,6 +213,23 @@ def _entry_name(desktop_entry: str) -> str | None:
     return next((line[5:].strip() for line in desktop_entry.splitlines() if line.startswith("Name=")), None)
 
 
+# Nomes dos processos dos navegadores acima (nativos, Flatpak e Snap rodam com esses nomes).
+_CHROMIUM_PROCESSES = frozenset({"chrome", "chromium", "chromium-browser", "msedge", "brave",
+                                 "vivaldi-bin", "opera"})
+
+
+def _chromium_running() -> bool:
+    """O GNOME/KDE ligam cada janela aberta ao .desktop do app. Apagar ou trocar esse arquivo com o
+    navegador aberto faz o painel refazer a ligação, e as janelas somem como se tivessem sido
+    minimizadas/fechadas. Por isso só mexemos nos atalhos com os navegadores fechados."""
+    try:
+        import psutil
+        return any((proc.info.get("name") or "").lower() in _CHROMIUM_PROCESSES
+                   for proc in psutil.process_iter(["name"]))
+    except Exception:
+        return False
+
+
 def _refresh_desktop_database() -> None:
     if not si._has_binary("update-desktop-database"):
         return
@@ -251,6 +269,7 @@ def apply(url: str) -> BrowserResult:
 
     user_dir = _user_apps_dir()
     system_dirs = _system_app_dirs()
+    changed = False
     for name in _CHROMIUM_DESKTOP_FILES:
         source = next((d / name for d in system_dirs if (d / name).is_file()), None)
         if source is None:
@@ -263,19 +282,29 @@ def apply(url: str) -> BrowserResult:
                     f"{target} é um atalho seu — não mexi; adicione --proxy-pac-url={url} na linha Exec= dele.")
                 continue
             entry = si._read_user_file(source)
-            si._write_user_file(target, with_pac_flag(entry, url))
+            wanted = with_pac_flag(entry, url)
+            # Só grava se mudou (1ª vez ou troca da porta do PAC): regravar a cada motor ligado
+            # faria o painel do GNOME/KDE refazer a ligação das janelas abertas (veja
+            # _chromium_running).
+            if existing != wanted:
+                si._write_user_file(target, wanted)
+                changed = True
             result.chromium.append(_entry_name(entry) or name)
         except _ERRORS as exc:
             result.messages.append(f"{name}: falhou: {si._cmd_error(exc)}")
-    if result.chromium:
+    if changed:
         _refresh_desktop_database()
+    if result.chromium:
         result.messages.append(
             f"{', '.join(result.chromium)}: atalho do menu ajustado com --proxy-pac-url — feche TODAS as "
             f"janelas (e o ícone da bandeja, se houver) e abra de novo pelo menu.")
     return result
 
 
-def remove() -> list[str]:
+def remove(keep_launchers: bool = False) -> list[str]:
+    """keep_launchers=True (motor parando): o Firefox é restaurado, mas os atalhos do Chromium
+    ficam — sem o motor o PAC não responde e o navegador conecta direto, e não mexer neles evita
+    que as janelas abertas sumam da tela. Eles só saem ao desativar a integração."""
     messages: list[str] = []
     restored = 0
     for profile in firefox_profiles():
@@ -286,17 +315,33 @@ def remove() -> list[str]:
     if restored:
         messages.append(f"Firefox: proxy restaurado em {restored} perfil(is).")
 
+    if keep_launchers:
+        return messages
+
     removed: list[str] = []
     user_dir = _user_apps_dir()
+    overrides: list[tuple[Path, str]] = []
     for name in _CHROMIUM_DESKTOP_FILES:
         target = user_dir / name
         try:
             entry = si._read_user_file(target)
-            if _OVERRIDE_MARK in entry:
-                si._delete_user_file(target)
-                removed.append(_entry_name(entry) or name)
         except _ERRORS as exc:
             messages.append(f"{name}: falhou ao restaurar: {si._cmd_error(exc)}")
+            continue
+        if _OVERRIDE_MARK in entry:
+            overrides.append((target, entry))
+    if overrides and _chromium_running():
+        # Fica para a próxima remoção com o navegador fechado. Enquanto isso o atalho ainda aponta
+        # para o PAC, que sem o motor não responde — e aí o navegador conecta direto.
+        messages.append("Navegador aberto: o atalho ajustado do menu será restaurado quando você "
+                        "fechá-lo e remover a integração de novo (sem o motor, ele conecta direto).")
+        overrides = []
+    for target, entry in overrides:
+        try:
+            si._delete_user_file(target)
+            removed.append(_entry_name(entry) or target.name)
+        except _ERRORS as exc:
+            messages.append(f"{target.name}: falhou ao restaurar: {si._cmd_error(exc)}")
     if removed:
         _refresh_desktop_database()
         messages.append(f"{', '.join(removed)}: atalho original do menu restaurado.")

@@ -65,12 +65,14 @@ def apply_system_proxy(url: str, http_port: int) -> tuple[bool, str]:
     return False, f"Sistema operacional não suportado para integração automática: {system}"
 
 
-def remove_system_proxy() -> tuple[bool, str]:
+def remove_system_proxy(keep_browser_launchers: bool = False) -> tuple[bool, str]:
+    """keep_browser_launchers=True quando é só o motor parando: no Linux, os atalhos ajustados do
+    Chromium ficam (veja browser_proxy.remove). False ao desativar a integração de vez."""
     system = platform.system()
     if system == "Windows":
         return _remove_windows()
     if system == "Linux":
-        return _remove_linux()
+        return _remove_linux(keep_browser_launchers)
     return False, f"Sistema operacional não suportado para integração automática: {system}"
 
 
@@ -166,10 +168,10 @@ def _apply_linux(url: str, http_port: int) -> tuple[bool, str]:
     return ok_any, " ".join(messages)
 
 
-def _remove_linux() -> tuple[bool, str]:
+def _remove_linux(keep_browser_launchers: bool = False) -> tuple[bool, str]:
     from . import browser_proxy
 
-    messages: list[str] = list(browser_proxy.remove())
+    messages: list[str] = list(browser_proxy.remove(keep_launchers=keep_browser_launchers))
     if _has_binary("gsettings"):
         try:
             _run_as_desktop_user(["gsettings", "set", "org.gnome.system.proxy", "mode", "none"])

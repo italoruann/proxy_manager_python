@@ -125,7 +125,7 @@ class AppContext(QObject):
                 system_integration.apply_system_proxy(
                     system_integration.pac_url(settings.pac_port), settings.http_port)
             else:
-                system_integration.remove_system_proxy()
+                system_integration.remove_system_proxy(keep_browser_launchers=True)
         except Exception:
             pass
 

@@ -381,7 +381,7 @@ def test_system_integration_follows_engine_lifecycle(window, monkeypatch):
     monkeypatch.setattr(system_integration, "apply_system_proxy",
                          lambda url, port: calls.append(("apply", url, port)) or (True, "ok"))
     monkeypatch.setattr(system_integration, "remove_system_proxy",
-                         lambda: calls.append(("remove",)) or (True, "ok"))
+                         lambda **kw: calls.append(("remove",)) or (True, "ok"))
 
     ctx = window.ctx
     ctx.config.settings.system_integration_enabled = True

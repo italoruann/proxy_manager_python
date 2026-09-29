@@ -35,6 +35,7 @@ def home(monkeypatch, tmp_path):
     monkeypatch.setattr(si, "_has_binary", lambda name: False)
     monkeypatch.setenv("XDG_DATA_DIRS", str(tmp_path / "usr-share"))
     monkeypatch.setattr(bp, "_EXTRA_APP_DIRS", (tmp_path / "flatpak-apps",))
+    monkeypatch.setattr(bp, "_chromium_running", lambda: False)
     return home
 
 
@@ -136,3 +137,43 @@ def test_chromium_user_launcher_is_never_overwritten(home, tmp_path):
     assert any("não mexi" in m for m in result.messages)
     bp.remove()
     assert mine.read_text(encoding="utf-8") == "[Desktop Entry]\nExec=meu-chromium\n"
+
+
+def _install_chrome(tmp_path):
+    (tmp_path / "usr-share/applications").mkdir(parents=True)
+    (tmp_path / "usr-share/applications/google-chrome.desktop").write_text(CHROME_ENTRY, encoding="utf-8")
+
+
+def test_engine_stop_keeps_chromium_launchers(home, tmp_path):
+    """Regressão: apagar o .desktop com o navegador aberto fazia o GNOME/KDE sumir com as janelas
+    dele (pareciam minimizadas/fechadas). Parar o motor não mexe mais nos atalhos."""
+    _install_chrome(tmp_path)
+    bp.apply(PAC)
+    bp.remove(keep_launchers=True)
+    assert (home / ".local/share/applications/google-chrome.desktop").exists()
+
+
+def test_apply_does_not_rewrite_unchanged_launcher(home, tmp_path, monkeypatch):
+    _install_chrome(tmp_path)
+    bp.apply(PAC)
+    writes = []
+    real_write = si._write_user_file
+    monkeypatch.setattr(si, "_write_user_file", lambda p, t: writes.append(p) or real_write(p, t))
+    result = bp.apply(PAC)
+    assert result.chromium == ["Google Chrome"]
+    assert not [p for p in writes if p.suffix == ".desktop"]
+
+
+def test_disabling_integration_waits_for_browser_to_close(home, tmp_path, monkeypatch):
+    _install_chrome(tmp_path)
+    bp.apply(PAC)
+    target = home / ".local/share/applications/google-chrome.desktop"
+
+    monkeypatch.setattr(bp, "_chromium_running", lambda: True)
+    messages = bp.remove()
+    assert target.exists()
+    assert any("Navegador aberto" in m for m in messages)
+
+    monkeypatch.setattr(bp, "_chromium_running", lambda: False)
+    bp.remove()
+    assert not target.exists()

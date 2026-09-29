@@ -75,7 +75,7 @@ if ($Running) {
         Start-Sleep -Seconds 1
         # Morto a forca ele nao desfez o proxy do sistema; desfaz aqui.
         Invoke-Python "Remover o proxy do sistema" @("-c",
-            "from proxy_manager.core.system_integration import remove_system_proxy; print(remove_system_proxy()[1])")
+            "from proxy_manager.core.system_integration import remove_system_proxy; print(remove_system_proxy(keep_browser_launchers=True)[1])")
     }
 }
 
