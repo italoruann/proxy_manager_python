@@ -118,9 +118,16 @@ _KWRITECONFIG_BINARIES = ("kwriteconfig6", "kwriteconfig5")
 
 
 def _apply_linux(url: str, http_port: int) -> tuple[bool, str]:
+    """Cada ambiente gráfico guarda o proxy de um jeito (gsettings, kioslaverc, nenhum...) e cada
+    navegador lê de um lugar diferente — o Firefox nem lê o do KDE. Por isso configuramos direto os
+    navegadores (user.js do Firefox, atalhos .desktop do Chromium), o que funciona igual em qualquer
+    distro/ambiente, e o proxy do sistema fica só como complemento para os demais apps."""
+    from . import browser_proxy
+
     messages: list[str] = []
-    ok_any = False
-    gsettings_ok = False
+    browsers = browser_proxy.apply(url)
+    messages.extend(browsers.messages)
+    ok_any = browsers.configured_any
 
     if _has_binary("gsettings"):
         try:
@@ -128,7 +135,7 @@ def _apply_linux(url: str, http_port: int) -> tuple[bool, str]:
             _run_as_desktop_user(["gsettings", "set", "org.gnome.system.proxy", "autoconfig-url", url])
             if _gsettings_persisted(url):
                 messages.append("GNOME/gsettings configurado.")
-                ok_any = gsettings_ok = True
+                ok_any = True
             else:
                 messages.append(_GSETTINGS_NOT_PERSISTED)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
@@ -141,31 +148,28 @@ def _apply_linux(url: str, http_port: int) -> tuple[bool, str]:
             ok_any = True
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, RuntimeError) as exc:
             messages.append(f"KDE/kioslaverc falhou: {_cmd_error(exc)}")
-        if not gsettings_ok:
-            messages.append(_KDE_FIREFOX_NEEDS_GSETTINGS)
 
     env_path = _write_env_script(http_port, url)
     messages.append(f"Script de variáveis de ambiente gerado em {env_path} (use 'source' para apps de terminal).")
 
     desktop = os.environ.get("XDG_CURRENT_DESKTOP", "")
-    if ok_any and desktop and not _chromium_reads_system_proxy(desktop):
-        ok_any = False
+    if not browsers.chromium and desktop and not _chromium_reads_system_proxy(desktop):
         messages.append(
-            f"Atenção: no ambiente {desktop}, Chrome/Chromium/Edge/Brave ignoram o proxy do sistema "
-            f"(só leem no GNOME, KDE, Cinnamon, Unity, Pantheon, Deepin e UKUI). Abra o navegador com "
-            f"--proxy-pac-url={url} (ex.: no campo Exec= do atalho .desktop dele)."
+            f"Atenção: no ambiente {desktop}, Chrome/Chromium/Edge/Brave ignoram o proxy do sistema e "
+            f"nenhum atalho deles foi encontrado para ajustar. Abra o navegador com --proxy-pac-url={url}."
         )
-
-    if not ok_any and not desktop:
+    if not ok_any:
         messages.append(
-            "Nenhum ambiente gráfico suportado automaticamente foi detectado; "
-            "configure manualmente a URL do PAC acima nas configurações de rede do seu desktop."
+            "Nenhum navegador ou ambiente gráfico foi configurado automaticamente; "
+            f"configure manualmente a URL do PAC ({url}) no navegador."
         )
     return ok_any, " ".join(messages)
 
 
 def _remove_linux() -> tuple[bool, str]:
-    messages: list[str] = []
+    from . import browser_proxy
+
+    messages: list[str] = list(browser_proxy.remove())
     if _has_binary("gsettings"):
         try:
             _run_as_desktop_user(["gsettings", "set", "org.gnome.system.proxy", "mode", "none"])
@@ -212,15 +216,6 @@ def _find_kwriteconfig() -> str | None:
     return next((name for name in _KWRITECONFIG_BINARIES if _has_binary(name)), None)
 
 
-# No KDE o Firefox não lê o kioslaverc: só o gsettings (org.gnome.system.proxy) ou as variáveis
-# de ambiente. Sem o gsettings gravando de verdade, só o Chrome/Chromium pega o proxy.
-_KDE_FIREFOX_NEEDS_GSETTINGS = (
-    "Atenção (KDE): o Firefox não lê o proxy do KDE, só o do gsettings — instale gsettings e dconf "
-    "(Fedora: sudo dnf install glib2 dconf gsettings-desktop-schemas; Kubuntu: sudo apt install "
-    "libglib2.0-bin dconf-gsettings-backend gsettings-desktop-schemas) ou configure o PAC direto "
-    "no Firefox (Configurações > Rede > URL de configuração automática de proxy)."
-)
-
 _KIOSLAVERC_GROUP = "Proxy Settings"
 
 
@@ -238,11 +233,9 @@ def _kde_present() -> bool:
 
 def _kioslaverc_path() -> Path:
     """Onde o Chromium e o KIO leem o proxy do KDE no Plasma 5/6: $XDG_CONFIG_HOME/kioslaverc."""
-    uid = _desktop_uid()
-    if uid is not None:
-        import pwd
-        return Path(pwd.getpwuid(uid).pw_dir) / ".config" / "kioslaverc"
-    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "kioslaverc"
+    if _desktop_uid() is not None:
+        return _desktop_home() / ".config" / "kioslaverc"
+    return Path(os.environ.get("XDG_CONFIG_HOME") or _desktop_home() / ".config") / "kioslaverc"
 
 
 def _set_kde_proxy(values: dict[str, str]) -> None:
@@ -256,19 +249,48 @@ def _set_kde_proxy(values: dict[str, str]) -> None:
             _run_as_desktop_user([kwriteconfig, "--file", "kioslaverc", "--group", _KIOSLAVERC_GROUP,
                                   "--key", key, value])
     else:
-        text = _edit_kioslaverc(_read_kioslaverc_text(path), values)
-        _capture_as_desktop_user(["tee", "--", str(path)], stdin=text.encode("utf-8"))
+        _write_user_file(path, _edit_kioslaverc(_read_user_file(path), values))
 
-    current = _parse_kioslaverc(_read_kioslaverc_text(path))
+    current = _parse_kioslaverc(_read_user_file(path))
     wrong = [key for key, value in values.items() if current.get(key) != value]
     if wrong:
         raise RuntimeError(f"{path} não ficou com {', '.join(wrong)} gravado.")
     _notify_kde_proxy_changed()
 
 
-def _read_kioslaverc_text(path: Path) -> str:
-    # Lê como o usuário da sessão, não como root: o arquivo fica na HOME dele, que ele controla.
+def _desktop_home() -> Path:
+    uid = _desktop_uid()
+    if uid is not None:
+        import pwd
+        return Path(pwd.getpwuid(uid).pw_dir)
+    return Path.home()
+
+
+# Arquivos na HOME do usuário: rodando elevado, lemos/gravamos como ELE (não como root) — senão um
+# symlink plantado ali faria o root ler ou sobrescrever qualquer arquivo do sistema.
+def _read_user_file(path: Path) -> str:
+    if _desktop_uid() is None:
+        try:
+            return path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return ""
     return _capture_as_desktop_user(["sh", "-c", 'cat -- "$1" 2>/dev/null || true', "sh", str(path)])
+
+
+def _write_user_file(path: Path, text: str) -> None:
+    if _desktop_uid() is None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return
+    _capture_as_desktop_user(["sh", "-c", 'mkdir -p -- "$(dirname -- "$1")" && cat > "$1"', "sh", str(path)],
+                             stdin=text.encode("utf-8"))
+
+
+def _delete_user_file(path: Path) -> None:
+    if _desktop_uid() is None:
+        path.unlink(missing_ok=True)
+        return
+    _capture_as_desktop_user(["rm", "-f", "--", str(path)])
 
 
 def _parse_kioslaverc(text: str) -> dict[str, str]:

@@ -4,6 +4,7 @@ import subprocess
 
 import pytest
 
+from proxy_manager.core import browser_proxy
 from proxy_manager.core import system_integration as mod
 
 PAC = "http://127.0.0.1:58093/proxy.pac"
@@ -24,6 +25,10 @@ def _only_gsettings(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.delenv("XDG_CURRENT_DESKTOP", raising=False)
     monkeypatch.delenv("KDE_SESSION_VERSION", raising=False)
+    # Sem navegadores instalados: a parte dos navegadores é testada em test_browser_proxy.py.
+    monkeypatch.setattr(mod, "_desktop_home", lambda: tmp_path / "home")
+    monkeypatch.setenv("XDG_DATA_DIRS", str(tmp_path / "share"))
+    monkeypatch.setattr(browser_proxy, "_EXTRA_APP_DIRS", ())
 
 
 def _fake_gsettings(monkeypatch, persisted: bool):
@@ -66,11 +71,10 @@ def test_gsettings_missing_schema_explains_fix(monkeypatch):
     assert "gsettings-desktop-schemas" in message
 
 
-def test_warns_that_chromium_ignores_system_proxy_on_xfce(monkeypatch):
+def test_warns_that_chromium_ignores_system_proxy_on_xfce_without_launchers(monkeypatch):
     _fake_gsettings(monkeypatch, persisted=True)
     monkeypatch.setenv("XDG_CURRENT_DESKTOP", "XFCE")
     ok, message = mod._apply_linux(PAC, 58091)
-    assert ok is False
     assert f"--proxy-pac-url={PAC}" in message
 
 
@@ -139,11 +143,11 @@ def test_kde_creates_kioslaverc_and_reverts(monkeypatch, tmp_path):
     assert mod._parse_kioslaverc((tmp_path / "kioslaverc").read_text(encoding="utf-8"))["ProxyType"] == "0"
 
 
-def test_kde_warns_firefox_when_gsettings_not_persisted(monkeypatch):
+def test_kde_still_ok_when_gsettings_not_persisted(monkeypatch):
     _fake_kde(monkeypatch, gsettings_persisted=False)
     ok, message = mod._apply_linux(PAC, 58091)
     assert ok is True  # o Chrome ainda pega pelo kioslaverc
-    assert "Firefox" in message
+    assert "KDE/kioslaverc configurado" in message
 
 
 def test_kde_detected_without_env_from_existing_kioslaverc(monkeypatch, tmp_path):
