@@ -33,7 +33,31 @@ def main() -> None:
     if not (start_minimized and settings.minimize_to_tray and QSystemTrayIcon.isSystemTrayAvailable()):
         window.show()
 
+    _quit_on_termination_signals(app, window._quit_app)
     sys.exit(app.exec())
+
+
+def _quit_on_termination_signals(app, quit_app) -> None:
+    """SIGTERM (pkill, logout, scripts de build reinstalando) e Ctrl+C no terminal passam a sair
+    pelo mesmo caminho do "Sair": o motor para e desfaz o proxy dos navegadores/sistema. Sem isso
+    o processo morria na hora e deixava tudo apontando para um PAC morto."""
+    import signal
+
+    from PySide6.QtCore import QTimer
+
+    def handler(_signum, _frame) -> None:
+        quit_app()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(sig, handler)
+        except (ValueError, OSError):
+            pass
+    # O Python só roda handlers de sinal quando ganha o controle; parado dentro do loop do Qt, isso
+    # nunca acontece. Um timer vazio devolve o controle a ele periodicamente.
+    timer = QTimer(app)
+    timer.timeout.connect(lambda: None)
+    timer.start(300)
 
 
 if __name__ == "__main__":

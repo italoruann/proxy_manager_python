@@ -1,4 +1,5 @@
 # Gera dist\ProxyManager.exe: standalone (nao precisa de Python instalado na maquina de destino).
+# Antes, sempre fecha o Proxy Manager se estiver aberto e apaga o build anterior.
 #
 #   .\scripts\build_windows.ps1          -> roda como usuario comum (modo explicito/PAC)
 #   .\scripts\build_windows.ps1 -Admin   -> pede UAC ao abrir (necessario so pro modo transparente)
@@ -53,7 +54,39 @@ function Invoke-Python([string]$What, [string[]]$Arguments) {
     if ($LASTEXITCODE -ne 0) { throw "$What falhou (codigo $LASTEXITCODE)" }
 }
 
-Write-Host "Gerando icone..."
+# --- Remove a versao anterior -------------------------------------------------
+# O .exe aberto fica travado pelo Windows e o PyInstaller nao consegue sobrescreve-lo. Fecha pela
+# janela primeiro (sai pelo caminho normal, que desfaz o proxy do sistema); so forca se precisar.
+$Running = @(Get-Process -Name ProxyManager -ErrorAction SilentlyContinue)
+if ($Running) {
+    Write-Host "Fechando o Proxy Manager em execucao..."
+    foreach ($p in $Running) { [void]$p.CloseMainWindow() }
+    $Deadline = (Get-Date).AddSeconds(10)
+    while ((Get-Process -Name ProxyManager -ErrorAction SilentlyContinue) -and ((Get-Date) -lt $Deadline)) {
+        Start-Sleep -Milliseconds 300
+    }
+    $Left = @(Get-Process -Name ProxyManager -ErrorAction SilentlyContinue)
+    if ($Left) {
+        try {
+            $Left | Stop-Process -Force -ErrorAction Stop
+        } catch {
+            throw "Nao consegui fechar o Proxy Manager em execucao (se ele foi aberto como administrador, feche-o pela bandeja ou rode este script como administrador)."
+        }
+        Start-Sleep -Seconds 1
+        # Morto a forca ele nao desfez o proxy do sistema; desfaz aqui.
+        Invoke-Python "Remover o proxy do sistema" @("-c",
+            "from proxy_manager.core.system_integration import remove_system_proxy; print(remove_system_proxy()[1])")
+    }
+}
+
+foreach ($Old in @("dist\ProxyManager.exe", "build")) {
+    if (Test-Path $Old) {
+        Write-Host "Removendo $Old anterior..."
+        Remove-Item $Old -Recurse -Force
+    }
+}
+
+Write-Host "`nGerando icone..."
 Invoke-Python "Gerar o icone" @("packaging\generate_icon.py")
 
 Write-Host "`nRodando PyInstaller..."

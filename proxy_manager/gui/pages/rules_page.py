@@ -384,7 +384,8 @@ class RulesPage(QWidget):
 
         help_label = QLabel(
             "Sintaxe: <code>apps: proc1.exe, proc2</code> define o escopo das linhas seguintes "
-            "(<code>apps: *</code> volta a valer para todos). Cada regra é "
+            "(<code>apps: *</code> volta a valer para todos); várias linhas <code>apps:</code> "
+            "seguidas somam os apps. Cada regra é "
             "<code>padrao.dominio.com [+direct|+block|+proxy:nome]</code>; sem sufixo, "
             "usa o proxy padrão. Prefixe com <code>!</code> para desabilitar uma regra sem apagá-la."
         )

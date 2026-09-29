@@ -89,6 +89,8 @@ ads.tracker.com +block
 | `! regra`                | Desativa a linha sem apagar                          |
 
 - Avaliadas **de cima para baixo**: a primeira que casar vence.
+- Várias linhas `apps:` seguidas somam: `apps: chrome` + `apps: firefox` é o mesmo que
+  `apps: chrome, firefox`.
 - Alvos aceitos: `*.dominio.com`, IP exato ou faixa CIDR (`10.0.0.0/8`).
 
 ---
@@ -117,6 +119,11 @@ pega até os apps que ignoram o proxy do sistema. Usa `nftables` no Linux e WinD
 Gera um executável que roda sem Python instalado. Os scripts usam o `uv` se ele estiver
 instalado; senão, criam/usam o `.venv` com o `pip`.
 
+Não precisa desinstalar nada antes de gerar de novo: os scripts sempre fecham o Proxy Manager se
+ele estiver aberto (desfazendo o proxy dos navegadores) e apagam o build anterior. No Linux,
+`--install` também remove qualquer instalação anterior (de usuário ou de admin) antes de instalar
+a nova.
+
 **Windows**: gera `dist\ProxyManager.exe`.
 
 ```powershell
@@ -131,7 +138,7 @@ instalado; senão, criam/usam o `.venv` com o `pip`.
 ./scripts/build_linux.sh --install          # instala para o seu usuário, com atalho no menu (sem sudo)
 ./scripts/build_linux.sh --install --admin  # instala em /opt com atalho que pede senha via pkexec
                                             # (só para o modo transparente)
-./scripts/build_linux.sh --uninstall        # remove a instalação do seu usuário
+./scripts/build_linux.sh --uninstall        # fecha o app e remove todas as instalações
 ```
 
 ---

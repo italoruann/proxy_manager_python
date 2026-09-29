@@ -142,6 +142,10 @@ class RuleSet:
     def parse(text: str) -> "RuleSet":
         rules: list[Rule] = []
         current_apps: list[str] = []
+        # Linhas "apps:" seguidas (sem regra entre elas) somam: "apps: chrome" + "apps: firefox"
+        # vale para os dois, igual a "apps: chrome, firefox". Uma "apps:" depois de alguma regra
+        # começa um bloco novo.
+        in_apps_header = False
         for line_no, raw_line in enumerate(text.splitlines(), start=1):
             line = raw_line.strip()
             if not line or line.startswith("#"):
@@ -151,8 +155,12 @@ class RuleSet:
                 if value == "*" or value == "":
                     current_apps = []
                 else:
-                    current_apps = [v.strip() for v in value.split(",") if v.strip()]
+                    apps = [v.strip() for v in value.split(",") if v.strip()]
+                    base = current_apps if in_apps_header else []
+                    current_apps = base + [a for a in apps if a not in base]
+                in_apps_header = True
                 continue
+            in_apps_header = False
 
             parts = line.split()
             target = parts[0]

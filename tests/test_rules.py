@@ -121,3 +121,20 @@ def test_app_matches_linux_launcher_aliases():
     assert app_matches(["chromium"], "chrome", "/snap/chromium/3000/usr/lib/chromium-browser/chrome")
     assert app_matches(["microsoft-edge"], "msedge", "/opt/microsoft/msedge/msedge")
     assert not app_matches(["google-chrome"], "firefox", "/usr/lib/firefox/firefox")
+
+
+def test_consecutive_apps_lines_accumulate():
+    """Regressão: "apps: chrome" seguido de "apps: firefox" só valia para o Firefox (a segunda
+    linha substituía a primeira). Linhas apps: seguidas precisam somar."""
+    rs = RuleSet.parse("apps: chrome\napps: firefox\n*\n")
+    assert rs.rules[0].apps == ["chrome", "firefox"]
+    assert rs.match("chrome.exe", "", "example.org", None).action_kind == "proxy"
+    assert rs.match("firefox.exe", "", "example.org", None).action_kind == "proxy"
+    assert rs.match("spotify.exe", "", "example.org", None).action_kind == "direct"
+
+
+def test_apps_line_after_a_rule_starts_a_new_scope():
+    rs = RuleSet.parse("apps: chrome\n*.a.com\napps: firefox\n*.b.com\napps: firefox\napps: *\n*.c.com\n")
+    assert [r.apps for r in rs.rules] == [["chrome"], ["firefox"], []]
+    reparsed = RuleSet.parse(rs.to_text())
+    assert [r.apps for r in reparsed.rules] == [["chrome"], ["firefox"], []]
