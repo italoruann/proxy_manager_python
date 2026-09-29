@@ -33,7 +33,7 @@ fail() {
 }
 
 if [ ! -x "$BIN" ]; then
-    fail "Não encontrei o executável do Proxy Manager (procurei em $DIR e /opt/proxy-manager). Rode scripts/build_linux.sh e/ou packaging/linux/install.sh primeiro."
+    fail "Não encontrei o executável do Proxy Manager (procurei em $DIR e /opt/proxy-manager). Rode ./scripts/build_linux.sh --install --admin primeiro."
 fi
 
 if [ -z "$DISPLAY" ]; then

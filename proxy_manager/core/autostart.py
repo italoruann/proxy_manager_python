@@ -42,14 +42,15 @@ def _is_enabled_windows() -> bool:
 
 
 def _set_windows(enabled: bool) -> tuple[bool, str]:
-    # Usa o Agendador de Tarefas (schtasks /RL HIGHEST), não a chave Run do registro: itens da
-    # chave Run sobem sem privilégio nenhum no login, e o executável empacotado pede elevação
-    # (UAC) sempre que é aberto — na chave Run ele simplesmente nunca conseguiria iniciar sozinho.
+    # Usa o Agendador de Tarefas, não a chave Run do registro: o executável gerado com -Admin pede
+    # elevação (UAC) sempre que é aberto, e pela chave Run ele nunca conseguiria iniciar sozinho.
+    # /RL HIGHEST (rodar elevado) só pode ser criado por um admin; sem elevação, LIMITED.
+    level = "HIGHEST" if _is_windows_admin() else "LIMITED"
     try:
         if enabled:
             result = subprocess.run(
                 ["schtasks", "/Create", "/TN", APP_ID, "/TR", _launch_command(),
-                 "/SC", "ONLOGON", "/RL", "HIGHEST", "/F"],
+                 "/SC", "ONLOGON", "/RL", level, "/F"],
                 capture_output=True, timeout=5,
             )
         else:
@@ -61,9 +62,17 @@ def _set_windows(enabled: bool) -> tuple[bool, str]:
         if result.returncode != 0:
             stderr = result.stderr.decode(errors="replace").strip()
             return False, f"Falha ao atualizar a tarefa agendada: {stderr}"
-        return True, "Início automático atualizado (tarefa agendada, roda elevado no login)."
+        return True, "Início automático atualizado (tarefa agendada no login)."
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, f"Falha ao atualizar a tarefa agendada: {exc}"
+
+
+def _is_windows_admin() -> bool:
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())  # type: ignore[attr-defined]
+    except Exception:
+        return False
 
 
 def _autostart_desktop_file() -> Path:

@@ -25,10 +25,12 @@ def main() -> None:
     ctx = AppContext()
     window = MainWindow(ctx)
 
-    start_minimized = "--start-minimized" in sys.argv or ctx.config.settings.start_minimized
-    # Sem bandeja do sistema (comum no GNOME sem extensão), iniciar minimizado deixaria o
-    # processo rodando sem nenhuma janela e sem ícone algum para reabri-lo.
-    if not start_minimized or not QSystemTrayIcon.isSystemTrayAvailable():
+    settings = ctx.config.settings
+    start_minimized = "--start-minimized" in sys.argv or settings.start_minimized
+    # Iniciar minimizado só faz sentido com a opção de manter na bandeja ligada. Sem bandeja do
+    # sistema (comum no GNOME sem extensão), deixaria o processo rodando sem janela e sem ícone
+    # algum para reabri-lo.
+    if not (start_minimized and settings.minimize_to_tray and QSystemTrayIcon.isSystemTrayAvailable()):
         window.show()
 
     sys.exit(app.exec())

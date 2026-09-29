@@ -251,8 +251,16 @@ class SettingsPage(QWidget):
 
     def _build_general_card(self) -> QFrame:
         frame, layout = _card("Geral")
+        settings = self.ctx.config.settings
+        self.minimize_to_tray_check = QCheckBox(
+            "Ao fechar a janela, continuar rodando na bandeja do sistema")
+        self.minimize_to_tray_check.setChecked(settings.minimize_to_tray)
+        self.minimize_to_tray_check.toggled.connect(self._on_minimize_to_tray_toggled)
+        layout.addWidget(self.minimize_to_tray_check)
+
         self.start_minimized_check = QCheckBox("Iniciar minimizado na bandeja do sistema")
-        self.start_minimized_check.setChecked(self.ctx.config.settings.start_minimized)
+        self.start_minimized_check.setChecked(settings.start_minimized)
+        self.start_minimized_check.setEnabled(settings.minimize_to_tray)
         self.start_minimized_check.toggled.connect(self._on_start_minimized_toggled)
         layout.addWidget(self.start_minimized_check)
 
@@ -261,6 +269,12 @@ class SettingsPage(QWidget):
         self.autostart_check.toggled.connect(self._on_autostart_toggled)
         layout.addWidget(self.autostart_check)
         return frame
+
+    def _on_minimize_to_tray_toggled(self, checked: bool) -> None:
+        self.ctx.config.settings.minimize_to_tray = checked
+        # Iniciar minimizado depende da bandeja: sem ela, o app abriria sem janela nenhuma.
+        self.start_minimized_check.setEnabled(checked)
+        self.ctx.apply_config_changes()
 
     def _on_start_minimized_toggled(self, checked: bool) -> None:
         self.ctx.config.settings.start_minimized = checked

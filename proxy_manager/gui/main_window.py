@@ -144,10 +144,10 @@ class MainWindow(QMainWindow):
         QApplication.instance().quit()
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        if self.tray is None:
-            # Sem bandeja não há como reabrir a janela depois — esconder aqui deixaria o
-            # processo rodando invisível, sem nenhum jeito de voltar a ele além de matá-lo pelo
-            # terminal. Fecha de verdade, como qualquer outro programa.
+        if self.tray is None or not self.ctx.config.settings.minimize_to_tray:
+            # Por padrão fechar fecha de verdade, como qualquer outro programa; esconder na
+            # bandeja é opcional (Configurações > Geral). Sem bandeja nem é possível: o processo
+            # ficaria rodando invisível, sem nenhum jeito de voltar a ele além de matá-lo.
             self.ctx.engine.stop()
             event.accept()
             QApplication.instance().quit()

@@ -109,6 +109,8 @@ class Settings:
     default_action: str = "direct"  # "direct" | "block"
     log_retention_days: int = 14
     start_minimized: bool = False
+    # Fechar a janela esconde na bandeja (True) ou encerra o app de verdade (False, o padrão).
+    minimize_to_tray: bool = False
     transparent_mode_enabled: bool = False
     transparent_port: int = 58095
 

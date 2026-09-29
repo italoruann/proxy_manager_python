@@ -14,7 +14,7 @@ fi
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BIN="$ROOT/dist/proxy-manager"
 if [ ! -x "$BIN" ]; then
-    echo "Não encontrei $BIN -- rode scripts/build_linux.sh primeiro (sem sudo)." >&2
+    echo "Não encontrei $BIN -- rode ./scripts/build_linux.sh --install --admin." >&2
     exit 1
 fi
 

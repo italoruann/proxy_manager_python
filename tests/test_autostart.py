@@ -1,8 +1,10 @@
-"""Testes do autostart no Windows: mocka subprocess (nunca roda schtasks de verdade). Trocamos a
-chave Run do registro por uma Tarefa Agendada com /RL HIGHEST porque o executável empacotado
-pede elevação (UAC) sempre que abre — itens da chave Run sobem sem privilégio nenhum no login e
-nunca conseguiriam iniciar um app que exige admin."""
+"""Testes do autostart no Windows: mocka subprocess (nunca roda schtasks de verdade). Usamos uma
+Tarefa Agendada em vez da chave Run do registro porque o executável gerado com -Admin pede
+elevação (UAC) sempre que abre — itens da chave Run sobem sem privilégio nenhum no login e nunca
+conseguiriam iniciar um app que exige admin."""
 import subprocess
+
+import pytest
 
 from proxy_manager.core import autostart
 
@@ -39,7 +41,9 @@ def test_is_enabled_returns_false_when_schtasks_is_unavailable(monkeypatch):
     assert autostart._is_enabled_windows() is False
 
 
-def test_set_enabled_true_creates_task_with_highest_privilege(monkeypatch):
+@pytest.mark.parametrize("admin,level", [(True, "HIGHEST"), (False, "LIMITED")])
+def test_set_enabled_true_creates_task_with_privilege_matching_elevation(monkeypatch, admin, level):
+    """Só um admin pode criar tarefa /RL HIGHEST; sem elevação o schtasks negaria o acesso."""
     calls = []
 
     def fake_run(cmd, capture_output=False, timeout=None):
@@ -47,12 +51,13 @@ def test_set_enabled_true_creates_task_with_highest_privilege(monkeypatch):
         return _FakeCompletedProcess(0)
 
     monkeypatch.setattr(autostart.subprocess, "run", fake_run)
+    monkeypatch.setattr(autostart, "_is_windows_admin", lambda: admin)
     ok, message = autostart._set_windows(True)
 
     assert ok is True
     cmd = calls[0]
     assert cmd[:3] == ["schtasks", "/Create", "/TN"]
-    assert "/RL" in cmd and cmd[cmd.index("/RL") + 1] == "HIGHEST"
+    assert "/RL" in cmd and cmd[cmd.index("/RL") + 1] == level
     assert "/SC" in cmd and cmd[cmd.index("/SC") + 1] == "ONLOGON"
 
 

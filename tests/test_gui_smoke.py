@@ -327,8 +327,24 @@ def test_close_without_tray_stops_engine_and_quits_app(window, app, monkeypatch)
     assert event.ignored is False
 
 
-def test_close_with_tray_hides_window_instead_of_quitting(window, monkeypatch):
-    """Com bandeja disponível, o comportamento de sempre continua valendo: esconder, não fechar."""
+def test_close_with_tray_quits_by_default(window, app, monkeypatch):
+    """Por padrão fechar encerra o app, mesmo com bandeja disponível."""
+    assert window.ctx.config.settings.minimize_to_tray is False
+    window.tray = object()
+    monkeypatch.setattr(window.ctx.engine, "stop", lambda: None)
+    quit_calls = []
+    monkeypatch.setattr(app, "quit", lambda: quit_calls.append(True))
+
+    event = _FakeCloseEvent()
+    window.closeEvent(event)
+
+    assert quit_calls == [True]
+    assert event.accepted is True
+
+
+def test_close_with_tray_hides_window_when_enabled(window, monkeypatch):
+    """Com a opção ligada nas Configurações, fechar só esconde a janela na bandeja."""
+    monkeypatch.setattr(window.ctx.config.settings, "minimize_to_tray", True)
     hide_calls = []
     monkeypatch.setattr(window, "hide", lambda: hide_calls.append(True))
     message_calls = []

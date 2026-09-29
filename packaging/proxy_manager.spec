@@ -1,12 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
 """Spec do PyInstaller — compartilhada entre Windows e Linux (roda no SO em que for invocada;
-PyInstaller não faz cross-compile). No Windows, embute um manifesto pedindo elevação (UAC)
-sempre que o executável for aberto, direto; no Linux não existe esse mecanismo — a elevação lá é
-feita por fora, via pkexec (veja packaging/linux/).
+PyInstaller não faz cross-compile).
 
-Uso: pyinstaller packaging/proxy_manager.spec --noconfirm
-(os scripts/build_windows.ps1 e scripts/build_linux.sh já fazem isso, incluindo gerar o ícone.)
+Por padrão o executável roda como usuário comum (basta para o modo explícito/PAC). Com
+PROXY_MANAGER_ADMIN=1 (scripts/build_windows.ps1 -Admin), no Windows embute um manifesto pedindo
+elevação (UAC) ao abrir — necessário só para o modo transparente. No Linux não existe esse
+mecanismo: a elevação lá é feita por fora, via pkexec (scripts/build_linux.sh --admin).
+
+Uso: use scripts/build_windows.ps1 ou scripts/build_linux.sh (geram o ícone e chamam isto).
 """
+import os
 import sys
 from pathlib import Path
 
@@ -14,6 +17,7 @@ ROOT = Path(SPECPATH).parent  # noqa: F821 -- SPECPATH é injetado pelo PyInstal
 ICON_ICO = str(ROOT / "packaging" / "icon.ico")
 ICON_PNG = str(ROOT / "packaging" / "icon.png")
 IS_WINDOWS = sys.platform == "win32"
+REQUIRE_ADMIN = os.environ.get("PROXY_MANAGER_ADMIN") == "1"
 
 # keyring descobre seus backends via entry points (pkg_resources) — mecanismo que o PyInstaller
 # não segue sozinho por análise estática. Sem isso, o app funcionaria no dev normalmente e falhar
@@ -58,5 +62,5 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=ICON_ICO if IS_WINDOWS else ICON_PNG,
-    uac_admin=IS_WINDOWS,  # pede elevação (UAC) sozinho toda vez que o .exe é aberto
+    uac_admin=IS_WINDOWS and REQUIRE_ADMIN,  # pede UAC ao abrir (só com -Admin)
 )

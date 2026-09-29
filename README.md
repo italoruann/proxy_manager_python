@@ -95,39 +95,43 @@ ads.tracker.com +block
 
 ## Modos de funcionamento
 
-**Explícito (padrão):** o app sobe servidores SOCKS5 e HTTP em `127.0.0.1` e configura o proxy
-do sistema com um arquivo PAC. Navegadores e a maioria dos programas passam a usar o Proxy Manager
-sem configuração manual.
+**Explícito (padrão):** o app sobe servidores SOCKS5 e HTTP em `127.0.0.1` e aponta os
+navegadores para eles com um arquivo PAC. Não precisa de administrador.
+
+- **Windows:** configura o proxy do sistema, que Chrome, Edge e Firefox já seguem.
+- **Linux (qualquer distro e ambiente gráfico):** configura direto os navegadores. No Firefox
+  (e derivados, inclusive Flatpak/Snap) grava o PAC no `user.js` de cada perfil. No
+  Chrome/Chromium/Edge/Brave/Vivaldi/Opera cria uma cópia do atalho do menu em
+  `~/.local/share/applications` com `--proxy-pac-url`. Também configura o gsettings (GNOME) e o
+  kioslaverc (KDE) para os outros apps. Tudo é desfeito quando o motor para.
+  **Feche e abra o navegador pelo menu** depois de ligar o motor.
 
 **Transparente** (aba **Configurações**): intercepta as conexões TCP no nível do sistema, o que
 pega até os apps que ignoram o proxy do sistema. Usa `nftables` no Linux e WinDivert no Windows.
-**Exige administrador/root.**
-
-No Linux, abra o app elevado com o script abaixo em vez de `sudo`, que costuma falhar com apps
-gráficos:
-
-```bash
-./scripts/run_linux_admin.sh
-```
+**Exige administrador/root**: gere o executável com a opção de admin (veja abaixo).
 
 ---
 
 ## Gerar executável
 
-Gera um executável que roda sem Python instalado e já pede permissão de administrador ao abrir.
+Gera um executável que roda sem Python instalado. Os scripts usam o `uv` se ele estiver
+instalado; senão, criam/usam o `.venv` com o `pip`.
 
-**Windows**: gera `dist\ProxyManager.exe`, que pede UAC ao abrir.
+**Windows**: gera `dist\ProxyManager.exe`.
 
 ```powershell
-.\scripts\build_windows.ps1
+.\scripts\build_windows.ps1          # roda como usuário comum
+.\scripts\build_windows.ps1 -Admin   # pede UAC ao abrir (só para o modo transparente)
 ```
 
-**Linux** (rode numa máquina Linux): gera `dist/proxy-manager` e depois instala em
-`/opt/proxy-manager` com um atalho no menu, que pede a senha via `pkexec`.
+**Linux** (rode numa máquina Linux): gera `dist/proxy-manager`.
 
 ```bash
-./scripts/build_linux.sh
-sudo packaging/linux/install.sh
+./scripts/build_linux.sh                    # só gera o executável
+./scripts/build_linux.sh --install          # instala para o seu usuário, com atalho no menu (sem sudo)
+./scripts/build_linux.sh --install --admin  # instala em /opt com atalho que pede senha via pkexec
+                                            # (só para o modo transparente)
+./scripts/build_linux.sh --uninstall        # remove a instalação do seu usuário
 ```
 
 ---
@@ -151,7 +155,7 @@ Não edite o `uv.lock` à mão: os comandos acima já atualizam ele junto com o 
   (`chrome://flags/#enable-quic`).
 - **SOCKS5 e domínios:** as regras por domínio só funcionam se o app enviar o hostname (remote
   DNS). Caso contrário, só as regras por IP/CIDR se aplicam.
-- **Firefox** pode não seguir o proxy do sistema. Se acontecer, cole a URL do PAC em
-  Configurações → Rede.
+- **Linux:** o Chrome e similares só recebem o proxy quando abertos pelo menu, pelo painel ou por
+  um link clicado em outro app. Abrindo pelo terminal, use `--proxy-pac-url=<URL do PAC>`.
 - **Não validado em máquina real:** o modo transparente no Windows e o empacotamento Linux ainda
   não foram testados. Teste com cautela antes de depender deles.
